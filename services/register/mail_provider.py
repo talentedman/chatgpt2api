@@ -164,7 +164,45 @@ class BaseMailProvider:
         return None
 
     def wait_for_code(self, mailbox: dict[str, Any]) -> str | None:
-        return self.wait_for(mailbox, _extract_code)
+        last_message_id = str(mailbox.get("_last_message_id") or "").strip()
+        last_code = str(mailbox.get("_last_code") or "").strip()
+        last_received_at = _parse_received_at(mailbox.get("_last_received_at"))
+
+        def on_message(message: dict[str, Any]) -> str | None:
+            nonlocal last_message_id, last_code, last_received_at
+
+            message_id = str(message.get("message_id") or "").strip()
+            if message_id and last_message_id and message_id == last_message_id:
+                return None
+
+            code = _extract_code(message)
+            if not code:
+                return None
+
+            received_at = _parse_received_at(message.get("received_at"))
+            if code == last_code:
+                same_or_older = False
+                if message_id and last_message_id:
+                    same_or_older = message_id == last_message_id
+                elif received_at and last_received_at:
+                    same_or_older = received_at <= last_received_at
+                else:
+                    same_or_older = True
+                if same_or_older:
+                    return None
+
+            if message_id:
+                mailbox["_last_message_id"] = message_id
+                last_message_id = message_id
+            if received_at:
+                iso = received_at.isoformat()
+                mailbox["_last_received_at"] = iso
+                last_received_at = received_at
+            mailbox["_last_code"] = code
+            last_code = code
+            return code
+
+        return self.wait_for(mailbox, on_message)
 
     def close(self) -> None:
         pass
@@ -200,7 +238,13 @@ class CloudflareTempMailProvider(BaseMailProvider):
         messages = [item for item in raw if isinstance(item, dict) and _message_matches_email(item, str(mailbox.get("address") or ""))]
         if not messages:
             return None
-        item = messages[0]
+        item = max(
+            messages,
+            key=lambda value: (
+                (_parse_received_at(value.get("createdAt") or value.get("created_at") or value.get("receivedAt") or value.get("date") or value.get("timestamp")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(),
+                str(value.get("id") or value.get("_id") or ""),
+            ),
+        )
         text_content, html_content = _extract_content(item)
         sender = item.get("from") or item.get("sender") or ""
         if isinstance(sender, dict):
@@ -307,7 +351,16 @@ class DuckMailProvider(BaseMailProvider):
         items = self._items(data)
         if not items:
             return None
-        item = items[0]
+        candidates = [value for value in items if isinstance(value, dict)]
+        if not candidates:
+            return None
+        item = max(
+            candidates,
+            key=lambda value: (
+                (_parse_received_at(value.get("createdAt") or value.get("created_at") or value.get("receivedAt") or value.get("date")) or datetime.fromtimestamp(0, tz=timezone.utc)).timestamp(),
+                str(value.get("id") or value.get("@id") or ""),
+            ),
+        )
         message_id = str(item.get("id") or item.get("@id") or "").replace("/messages/", "")
         if message_id:
             item = self._request("GET", f"/messages/{message_id}", token=str(mailbox.get("token") or ""))
