@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchSystemLogs, type SystemLog } from "@/lib/api";
+import { formatServerDateTime } from "@/lib/datetime";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 const LogType = {
@@ -144,7 +145,7 @@ function LogsContent() {
               <TableBody>
                 {currentRows.map((item, index) => (
                   <TableRow key={`${item.time}-${index}`} className="text-stone-600">
-                    <TableCell className="whitespace-nowrap">{item.time}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatServerDateTime(item.time)}</TableCell>
                     <TableCell><Badge variant="secondary" className="rounded-md">{typeLabels[item.type] || item.type}</Badge></TableCell>
                     {isCallLog ? <TableCell>{getDetailText(item, "key_name")}</TableCell> : null}
                     {isCallLog ? <TableCell>{formatDuration(item)}</TableCell> : null}

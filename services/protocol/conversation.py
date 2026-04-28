@@ -557,6 +557,7 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
         raise ImageGenerationError("unsupported image model,supported models: " + ", ".join(IMAGE_MODELS))
 
     emitted = False
+    emitted_result = False
     last_error = ""
     for index in range(1, request.n + 1):
         while True:
@@ -584,10 +585,21 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
                     emitted_for_token = True
                     returned_message = output.kind == "message"
                     returned_result = returned_result or output.kind == "result"
+                    emitted_result = emitted_result or output.kind == "result"
                     yield output
-                if returned_message or not returned_result:
+                if returned_message:
                     account_service.mark_image_result(token, False)
                     return
+                if not returned_result:
+                    account_service.mark_image_result(token, False)
+                    if emitted_result:
+                        return
+                    raise ImageGenerationError(
+                        "upstream did not return image result (timeout or missing image tool output), please retry",
+                        status_code=504,
+                        error_type="server_error",
+                        code="upstream_timeout",
+                    )
                 account_service.mark_image_result(token, True)
                 break
             except ImageGenerationError:

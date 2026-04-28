@@ -424,6 +424,7 @@ async function parseImageStreamResponse(
   let buffer = "";
   let created: number | null = null;
   let finalMessage = "";
+  let lastProgress = "";
   const data: Array<{ b64_json: string; revised_prompt?: string }> = [];
 
   const processEvent = (rawEvent: string) => {
@@ -465,6 +466,9 @@ async function parseImageStreamResponse(
     const progress = resolveImageStreamProgressText(chunk);
     if (progress && onProgress) {
       onProgress({ text: progress, chunk });
+    }
+    if (progress) {
+      lastProgress = progress;
     }
 
     if (chunk.object === "image.generation.message") {
@@ -519,7 +523,12 @@ async function parseImageStreamResponse(
   }
 
   if (data.length === 0) {
-    throw new Error(finalMessage || "流式未返回图片数据");
+    throw new Error(
+      finalMessage ||
+      (lastProgress
+        ? `${lastProgress}（上游未返回图片结果，请重试）`
+        : "上游未返回图片结果（可能超时或风控拦截），请重试"),
+    );
   }
 
   return {

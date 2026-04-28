@@ -20,6 +20,7 @@ import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { deleteManagedImages, fetchManagedImages, type ManagedImage } from "@/lib/api";
+import { formatServerDateTime } from "@/lib/datetime";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 
 function formatSize(size: number) {
@@ -219,7 +220,7 @@ function ImageManagerContent() {
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-1 font-medium text-stone-700">
                         <CalendarDays className="size-3.5" />
-                        {item.created_at}
+                        {formatServerDateTime(item.created_at)}
                       </div>
                       <div className="flex items-center gap-1">
                         <Button
