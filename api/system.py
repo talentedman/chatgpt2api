@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.support import require_admin, require_identity, resolve_image_base_url
 from services.config import config
-from services.image_service import list_images
+from services.image_service import delete_images, list_images
 from services.log_service import log_service
 from services.proxy_service import test_proxy
 
@@ -17,6 +17,10 @@ class SettingsUpdateRequest(BaseModel):
 
 class ProxyTestRequest(BaseModel):
     url: str = ""
+
+
+class ImageDeleteRequest(BaseModel):
+    paths: list[str] = Field(default_factory=list)
 
 
 def create_router(app_version: str) -> APIRouter:
@@ -52,6 +56,14 @@ def create_router(app_version: str) -> APIRouter:
         require_admin(authorization)
         return list_images(resolve_image_base_url(request), start_date=start_date.strip(), end_date=end_date.strip())
 
+    @router.delete("/api/images")
+    async def remove_images(body: ImageDeleteRequest, authorization: str | None = Header(default=None)):
+        require_admin(authorization)
+        paths = [str(item or "").strip() for item in body.paths if str(item or "").strip()]
+        if not paths:
+            raise HTTPException(status_code=400, detail={"error": "paths is required"})
+        return delete_images(paths)
+
     @router.get("/api/logs")
     async def get_logs(type: str = "", start_date: str = "", end_date: str = "", authorization: str | None = Header(default=None)):
         require_admin(authorization)
@@ -75,4 +87,3 @@ def create_router(app_version: str) -> APIRouter:
         }
 
     return router
-

@@ -58,7 +58,12 @@ def encode_images(images: Iterable[tuple[bytes, str, str]]) -> list[str]:
     return [base64.b64encode(data).decode("ascii") for data, _, _ in images if data]
 
 
-def save_image_bytes(image_data: bytes, base_url: str | None = None) -> str:
+def save_image_bytes(
+    image_data: bytes,
+    base_url: str | None = None,
+    prompt: str = "",
+    revised_prompt: str = "",
+) -> str:
     config.cleanup_old_images()
     file_hash = hashlib.md5(image_data).hexdigest()
     filename = f"{int(time.time())}_{file_hash}.png"
@@ -66,6 +71,24 @@ def save_image_bytes(image_data: bytes, base_url: str | None = None) -> str:
     file_path = config.images_dir / relative_dir / filename
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_bytes(image_data)
+    prompt_text = str(revised_prompt or prompt or "").strip()
+    meta_file_path = Path(f"{file_path.as_posix()}.meta.json")
+    try:
+        meta_file_path.write_text(
+            json.dumps(
+                {
+                    "prompt": prompt_text,
+                    "original_prompt": str(prompt or "").strip(),
+                    "revised_prompt": str(revised_prompt or "").strip(),
+                    "created_at": int(time.time()),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
     return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
 
 
@@ -163,12 +186,12 @@ def format_image_result(
         if response_format == "b64_json":
             data.append({
                 "b64_json": b64_json,
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url),
+                "url": save_image_bytes(base64.b64decode(b64_json), base_url, prompt, revised_prompt),
                 "revised_prompt": revised_prompt,
             })
         else:
             data.append({
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url),
+                "url": save_image_bytes(base64.b64decode(b64_json), base_url, prompt, revised_prompt),
                 "revised_prompt": revised_prompt,
             })
     result: dict[str, Any] = {"created": created or int(time.time()), "data": data}

@@ -63,10 +63,12 @@ export type SettingsConfig = {
 
 export type ManagedImage = {
   name: string;
+  path: string;
   date: string;
   size: number;
   url: string;
   created_at: string;
+  prompt?: string;
 };
 
 export type SystemLog = {
@@ -249,6 +251,16 @@ export async function fetchManagedImages(filters: { start_date?: string; end_dat
   if (filters.end_date) params.set("end_date", filters.end_date);
   return httpRequest<{ items: ManagedImage[]; groups: Array<{ date: string; items: ManagedImage[] }> }>(
     `/api/images${params.toString() ? `?${params.toString()}` : ""}`,
+  );
+}
+
+export async function deleteManagedImages(paths: string[]) {
+  return httpRequest<{ removed: number; missing: string[]; errors: Array<{ path: string; error: string }> }>(
+    "/api/images",
+    {
+      method: "DELETE",
+      body: { paths },
+    },
   );
 }
 

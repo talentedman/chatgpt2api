@@ -11,6 +11,7 @@ type LightboxImage = {
   src: string;
   sizeLabel?: string;
   dimensions?: string;
+  prompt?: string;
 };
 
 type ImageLightboxProps = {
@@ -130,6 +131,11 @@ export function ImageLightbox({
               draggable={false}
             />
           </div>
+          {current.prompt ? (
+            <div className="absolute bottom-4 left-1/2 z-10 w-[min(840px,90vw)] -translate-x-1/2 rounded-xl bg-black/55 px-4 py-2 text-sm leading-6 text-white/95">
+              <div className="max-h-24 overflow-auto">{current.prompt}</div>
+            </div>
+          ) : null}
 
           {/* next */}
           {hasNext && (
