@@ -93,6 +93,7 @@ export function ImageResults({
                   <span>
                     {turn.mode === "edit" ? "编辑图" : "文生图"}
                   </span>
+                  <span>{turn.stream ? "流式" : "非流式"}</span>
                   <span>{getTurnStatusLabel(turn.status)}</span>
                   <span>{formatConversationTime(turn.createdAt)}</span>
                 </div>
@@ -137,6 +138,7 @@ export function ImageResults({
 
                 <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-stone-500">
                   <span className="rounded-full bg-stone-100 px-3 py-1">{turn.count} 张</span>
+                  <span className="rounded-full bg-stone-100 px-3 py-1">{turn.stream ? "流式生成" : "普通生成"}</span>
                   <span className="rounded-full bg-stone-100 px-3 py-1">{getTurnStatusLabel(turn.status)}</span>
                   {turn.status === "queued" ? (
                     <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">等待当前对话中的前序任务完成</span>
@@ -235,7 +237,11 @@ export function ImageResults({
                               <LoaderCircle className="size-5 animate-spin" />
                             )}
                           </div>
-                          <p className="text-sm">{turn.status === "queued" ? "已加入当前对话队列..." : "正在处理图片..."}</p>
+                          <p className="text-sm">
+                            {turn.status === "queued"
+                              ? "已加入当前对话队列..."
+                              : image.progress?.trim() || "正在处理图片..."}
+                          </p>
                         </div>
                       </div>
                     );

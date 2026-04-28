@@ -1,4 +1,6 @@
 import { httpRequest } from "@/lib/request";
+import webConfig from "@/constants/common-env";
+import { clearStoredAuthSession, getStoredAuthKey } from "@/store/auth";
 
 export type AccountType = "Free" | "Plus" | "ProLite" | "Pro" | "Team";
 export type AccountStatus = "正常" | "限流" | "异常" | "禁用";
@@ -82,6 +84,24 @@ export type SystemLog = {
 export type ImageResponse = {
   created: number;
   data: Array<{ b64_json: string; revised_prompt?: string }>;
+};
+
+type ImageStreamChunk = {
+  object?: string;
+  created?: number;
+  model?: string;
+  index?: number;
+  total?: number;
+  progress_text?: string;
+  upstream_event_type?: string;
+  message?: string;
+  data?: Array<{ b64_json?: string; revised_prompt?: string }>;
+  error?: unknown;
+};
+
+export type ImageRequestOptions = {
+  stream?: boolean;
+  onProgress?: (event: { text: string; chunk: ImageStreamChunk }) => void;
 };
 
 export type LoginResponse = {
@@ -193,23 +213,32 @@ export async function updateAccount(
   });
 }
 
-export async function generateImage(prompt: string, model?: ImageModel, size?: string) {
-  return httpRequest<ImageResponse>(
+export async function generateImage(
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+  options: ImageRequestOptions = {},
+) {
+  return generateOrEditImage(
     "/v1/images/generations",
     {
-      method: "POST",
-      body: {
-        prompt,
-        ...(model ? { model } : {}),
-        ...(size ? { size } : {}),
-        n: 1,
-        response_format: "b64_json",
-      },
+      prompt,
+      ...(model ? { model } : {}),
+      ...(size ? { size } : {}),
+      n: 1,
+      response_format: "b64_json",
     },
+    options,
   );
 }
 
-export async function editImage(files: File | File[], prompt: string, model?: ImageModel, size?: string) {
+export async function editImage(
+  files: File | File[],
+  prompt: string,
+  model?: ImageModel,
+  size?: string,
+  options: ImageRequestOptions = {},
+) {
   const formData = new FormData();
   const uploadFiles = Array.isArray(files) ? files : [files];
 
@@ -224,14 +253,279 @@ export async function editImage(files: File | File[], prompt: string, model?: Im
     formData.append("size", size);
   }
   formData.append("n", "1");
+  formData.append("response_format", "b64_json");
+  if (options.stream) {
+    formData.append("stream", "true");
+  }
+  return generateOrEditImage("/v1/images/edits", formData, options);
+}
 
-  return httpRequest<ImageResponse>(
-    "/v1/images/edits",
-    {
+async function generateOrEditImage(
+  path: "/v1/images/generations" | "/v1/images/edits",
+  payload: Record<string, unknown> | FormData,
+  options: ImageRequestOptions = {},
+) {
+  if (!options.stream) {
+    return httpRequest<ImageResponse>(path, {
       method: "POST",
-      body: formData,
-    },
+      body: payload,
+    });
+  }
+
+  const requestHeaders = await buildAuthorizedHeaders(
+    payload instanceof FormData ? undefined : { "Content-Type": "application/json" },
   );
+
+  const response = await fetch(resolveApiPath(path), {
+    method: "POST",
+    headers: requestHeaders,
+    body: payload instanceof FormData ? payload : JSON.stringify({ ...payload, stream: true }),
+  });
+
+  if (response.status === 401) {
+    await redirectWhenUnauthorized();
+    throw new Error("登录已失效，请重新登录");
+  }
+
+  if (!response.ok) {
+    throw new Error(await extractHttpErrorMessage(response));
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.startsWith("text/event-stream")) {
+    const result = (await response.json()) as ImageResponse & { message?: string };
+    if (Array.isArray(result.data) && result.data.length > 0) {
+      return result;
+    }
+    throw new Error(String(result.message || "接口未返回图片数据"));
+  }
+
+  return parseImageStreamResponse(response, options.onProgress);
+}
+
+function resolveApiPath(path: string) {
+  const prefix = webConfig.apiUrl.replace(/\/$/, "");
+  return `${prefix}${path}`;
+}
+
+async function buildAuthorizedHeaders(headers?: HeadersInit) {
+  const merged = new Headers(headers);
+  const authKey = await getStoredAuthKey();
+  if (authKey && !merged.has("Authorization")) {
+    merged.set("Authorization", `Bearer ${authKey}`);
+  }
+  return merged;
+}
+
+async function redirectWhenUnauthorized() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  if (window.location.pathname.startsWith("/login")) {
+    return;
+  }
+  await clearStoredAuthSession();
+  window.location.replace("/login");
+}
+
+async function extractHttpErrorMessage(response: Response) {
+  try {
+    const payload = (await response.json()) as unknown;
+    const message = findErrorMessage(payload);
+    if (message) {
+      return message;
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    const text = await response.text();
+    if (text.trim()) {
+      return text;
+    }
+  } catch {
+    // ignore
+  }
+
+  return `请求失败 (${response.status})`;
+}
+
+function findErrorMessage(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const item = value as Record<string, unknown>;
+  const directMessage = item.message;
+  if (typeof directMessage === "string" && directMessage.trim()) {
+    return directMessage;
+  }
+
+  const detailMessage = findErrorMessage(item.detail);
+  if (detailMessage) {
+    return detailMessage;
+  }
+
+  const errorMessage = findErrorMessage(item.error);
+  if (errorMessage) {
+    return errorMessage;
+  }
+
+  return "";
+}
+
+function resolveImageStreamProgressText(chunk: ImageStreamChunk) {
+  const explicit = String(chunk.progress_text || "").trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  if (chunk.object === "image.generation.result") {
+    return "正在回传生成结果...";
+  }
+
+  const eventType = String(chunk.upstream_event_type || "").trim();
+  if (!eventType) {
+    return "正在生成图片...";
+  }
+
+  if (eventType === "moderation") {
+    return "正在安全审核...";
+  }
+  if (eventType === "server_ste_metadata") {
+    return "已开始生成...";
+  }
+  return `处理中 (${eventType})...`;
+}
+
+function extractImageStreamMessage(chunk: ImageStreamChunk) {
+  const candidates = [
+    findErrorMessage(chunk.error),
+    findErrorMessage(chunk),
+    String(chunk.message || "").trim(),
+  ];
+  return candidates.find((item) => item) || "";
+}
+
+async function parseImageStreamResponse(
+  response: Response,
+  onProgress?: (event: { text: string; chunk: ImageStreamChunk }) => void,
+) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("流式响应不可读取");
+  }
+
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let created: number | null = null;
+  let finalMessage = "";
+  const data: Array<{ b64_json: string; revised_prompt?: string }> = [];
+
+  const processEvent = (rawEvent: string) => {
+    const lines = rawEvent.split(/\r?\n/);
+    const dataLines: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (dataLines.length === 0) {
+      return false;
+    }
+
+    const payload = dataLines.join("\n").trim();
+    if (!payload) {
+      return false;
+    }
+    if (payload === "[DONE]") {
+      return true;
+    }
+
+    let chunk: ImageStreamChunk;
+    try {
+      chunk = JSON.parse(payload) as ImageStreamChunk;
+    } catch {
+      return false;
+    }
+
+    const maybeError = extractImageStreamMessage(chunk);
+    if (maybeError && !chunk.object?.startsWith("image.generation")) {
+      throw new Error(maybeError);
+    }
+
+    if (typeof chunk.created === "number" && !created) {
+      created = chunk.created;
+    }
+
+    const progress = resolveImageStreamProgressText(chunk);
+    if (progress && onProgress) {
+      onProgress({ text: progress, chunk });
+    }
+
+    if (chunk.object === "image.generation.message") {
+      finalMessage = String(chunk.message || "").trim();
+      return false;
+    }
+
+    if (Array.isArray(chunk.data)) {
+      chunk.data.forEach((item) => {
+        if (!item || typeof item !== "object") {
+          return;
+        }
+        const b64 = String(item.b64_json || "").trim();
+        if (!b64) {
+          return;
+        }
+        data.push({
+          b64_json: b64,
+          revised_prompt: typeof item.revised_prompt === "string" ? item.revised_prompt : undefined,
+        });
+      });
+    }
+
+    return false;
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    while (true) {
+      const separatorMatch = buffer.match(/\r?\n\r?\n/);
+      if (!separatorMatch || separatorMatch.index == null) {
+        break;
+      }
+      const eventText = buffer.slice(0, separatorMatch.index);
+      buffer = buffer.slice(separatorMatch.index + separatorMatch[0].length);
+      const reachedDone = processEvent(eventText);
+      if (reachedDone) {
+        buffer = "";
+        break;
+      }
+    }
+  }
+
+  const remaining = buffer.trim();
+  if (remaining) {
+    processEvent(remaining);
+  }
+
+  if (data.length === 0) {
+    throw new Error(finalMessage || "流式未返回图片数据");
+  }
+
+  return {
+    created: created || Math.floor(Date.now() / 1000),
+    data,
+  } satisfies ImageResponse;
 }
 
 export async function fetchSettingsConfig() {

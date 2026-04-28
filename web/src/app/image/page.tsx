@@ -36,6 +36,7 @@ import {
 
 const ACTIVE_CONVERSATION_STORAGE_KEY = "chatgpt2api:image_active_conversation_id";
 const IMAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_last_size";
+const IMAGE_STREAM_STORAGE_KEY = "chatgpt2api:image_stream_enabled";
 const activeConversationQueueIds = new Set<string>();
 
 function buildConversationTitle(prompt: string) {
@@ -185,6 +186,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [imageCount, setImageCount] = useState("1");
   const [imageMode, setImageMode] = useState<ImageConversationMode>("generate");
   const [imageSize, setImageSize] = useState("");
+  const [streamEnabled, setStreamEnabled] = useState(true);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [referenceImageFiles, setReferenceImageFiles] = useState<File[]>([]);
   const [referenceImages, setReferenceImages] = useState<StoredReferenceImage[]>([]);
@@ -228,7 +230,10 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     const loadHistory = async () => {
       try {
         const storedSize = typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_SIZE_STORAGE_KEY) : null;
+        const storedStream =
+          typeof window !== "undefined" ? window.localStorage.getItem(IMAGE_STREAM_STORAGE_KEY) : null;
         setImageSize(storedSize || "");
+        setStreamEnabled(storedStream == null ? true : storedStream !== "0");
 
         const items = await listImageConversations();
         const normalizedItems = await recoverConversationHistory(items);
@@ -325,6 +330,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     }
     window.localStorage.removeItem(IMAGE_SIZE_STORAGE_KEY);
   }, [imageSize]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(IMAGE_STREAM_STORAGE_KEY, streamEnabled ? "1" : "0");
+  }, [streamEnabled]);
 
   useEffect(() => {
     if (selectedConversationId && !conversations.some((conversation) => conversation.id === selectedConversationId)) {
@@ -548,6 +560,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                   ...turn,
                   status: "generating",
                   error: undefined,
+                  images: turn.images.map((image) =>
+                    image.status === "loading"
+                      ? { ...image, progress: queuedTurn.stream ? "正在建立流式连接..." : undefined }
+                      : image,
+                  ),
                 }
               : turn,
           ),
@@ -588,10 +605,46 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
 
         const tasks = pendingImages.map(async (pendingImage) => {
           try {
+            let lastProgressText = "";
+            const updateImageProgress = (text: string) => {
+              const normalizedText = text.trim();
+              if (!normalizedText || normalizedText === lastProgressText) {
+                return;
+              }
+              lastProgressText = normalizedText;
+              void updateConversation(
+                conversationId,
+                (current) => {
+                  const conversation = current ?? snapshot;
+                  return {
+                    ...conversation,
+                    updatedAt: new Date().toISOString(),
+                    turns: conversation.turns.map((turn) =>
+                      turn.id === queuedTurn.id
+                        ? {
+                            ...turn,
+                            images: turn.images.map((image) =>
+                              image.id === pendingImage.id ? { ...image, progress: normalizedText } : image,
+                            ),
+                          }
+                        : turn,
+                    ),
+                  };
+                },
+                { persist: false },
+              );
+            };
+
             const data =
               queuedTurn.mode === "edit"
-                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, queuedTurn.size)
-                : await generateImage(queuedTurn.prompt, queuedTurn.model, queuedTurn.size);
+                ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, queuedTurn.size, {
+                    stream: queuedTurn.stream,
+                    onProgress: ({ text }) => updateImageProgress(text),
+                  })
+                : await generateImage(queuedTurn.prompt, queuedTurn.model, queuedTurn.size, {
+                    stream: queuedTurn.stream,
+                    onProgress: ({ text }) => updateImageProgress(text),
+                  });
             const first = data.data?.[0];
             if (!first?.b64_json) {
               throw new Error("未返回图片数据");
@@ -601,6 +654,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               id: pendingImage.id,
               status: "success",
               b64_json: first.b64_json,
+              progress: undefined,
             };
 
             await updateConversation(
@@ -630,6 +684,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               id: pendingImage.id,
               status: "error",
               error: message,
+              progress: undefined,
             };
 
             await updateConversation(
@@ -755,6 +810,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
       id: turnId,
       prompt,
       model: "gpt-image-2",
+      stream: streamEnabled,
       mode: imageMode,
       referenceImages: imageMode === "edit" ? referenceImages : [],
       count: parsedCount,
@@ -887,6 +943,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             prompt={imagePrompt}
             imageCount={imageCount}
             imageSize={imageSize}
+            streamEnabled={streamEnabled}
             availableQuota={availableQuota}
             activeTaskCount={activeTaskCount}
             referenceImages={referenceImages}
@@ -896,6 +953,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
             onPromptChange={setImagePrompt}
             onImageCountChange={setImageCount}
             onImageSizeChange={setImageSize}
+            onStreamEnabledChange={setStreamEnabled}
             onSubmit={handleSubmit}
             onPickReferenceImage={() => fileInputRef.current?.click()}
             onReferenceImageChange={handleReferenceImageChange}

@@ -14,6 +14,7 @@ type ImageComposerProps = {
   prompt: string;
   imageCount: string;
   imageSize: string;
+  streamEnabled: boolean;
   availableQuota: string;
   activeTaskCount: number;
   referenceImages: Array<{ name: string; dataUrl: string }>;
@@ -23,6 +24,7 @@ type ImageComposerProps = {
   onPromptChange: (value: string) => void;
   onImageCountChange: (value: string) => void;
   onImageSizeChange: (value: string) => void;
+  onStreamEnabledChange: (value: boolean) => void;
   onSubmit: () => void | Promise<void>;
   onPickReferenceImage: () => void;
   onReferenceImageChange: (files: File[]) => void | Promise<void>;
@@ -34,6 +36,7 @@ export function ImageComposer({
   prompt,
   imageCount,
   imageSize,
+  streamEnabled,
   availableQuota,
   activeTaskCount,
   referenceImages,
@@ -43,6 +46,7 @@ export function ImageComposer({
   onPromptChange,
   onImageCountChange,
   onImageSizeChange,
+  onStreamEnabledChange,
   onSubmit,
   onPickReferenceImage,
   onReferenceImageChange,
@@ -256,6 +260,25 @@ export function ImageComposer({
                       图生图
                     </ModeButton>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => onStreamEnabledChange(!streamEnabled)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition sm:px-3 sm:text-sm",
+                      streamEnabled
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        : "border-stone-200 bg-white text-stone-600 hover:bg-stone-100",
+                    )}
+                    aria-label="切换流式生成"
+                  >
+                    <span
+                      className={cn(
+                        "inline-block size-2.5 rounded-full sm:size-3",
+                        streamEnabled ? "bg-emerald-500" : "bg-stone-400",
+                      )}
+                    />
+                    {streamEnabled ? "流式" : "普通"}
+                  </button>
                 </div>
 
                 <button

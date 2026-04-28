@@ -17,6 +17,7 @@ export type StoredImage = {
   status?: "loading" | "success" | "error";
   b64_json?: string;
   error?: string;
+  progress?: string;
 };
 
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
@@ -25,6 +26,7 @@ export type ImageTurn = {
   id: string;
   prompt: string;
   model: ImageModel;
+  stream: boolean;
   mode: ImageConversationMode;
   referenceImages: StoredReferenceImage[];
   count: number;
@@ -57,12 +59,20 @@ const IMAGE_CONVERSATIONS_KEY = "items";
 let imageConversationWriteQueue: Promise<void> = Promise.resolve();
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
-  if (image.status === "loading" || image.status === "error" || image.status === "success") {
-    return image;
-  }
+  const progress = typeof image.progress === "string" ? image.progress : undefined;
+  const error = typeof image.error === "string" ? image.error : undefined;
+  const normalizedStatus =
+    image.status === "loading" || image.status === "error" || image.status === "success"
+      ? image.status
+      : image.b64_json
+        ? "success"
+        : "loading";
   return {
-    ...image,
-    status: image.b64_json ? "success" : "loading",
+    id: String(image.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`),
+    status: normalizedStatus,
+    b64_json: typeof image.b64_json === "string" ? image.b64_json : undefined,
+    error,
+    progress,
   };
 }
 
@@ -121,6 +131,7 @@ function normalizeTurn(turn: ImageTurn & Record<string, unknown>): ImageTurn {
     id: String(turn.id || `${Date.now()}`),
     prompt: String(turn.prompt || ""),
     model: (turn.model as ImageModel) || "gpt-image-2",
+    stream: typeof turn.stream === "boolean" ? turn.stream : true,
     mode: turn.mode === "edit" ? "edit" : "generate",
     referenceImages: getLegacyReferenceImages(turn),
     count: Math.max(1, Number(turn.count || normalizedImages.length || 1)),
@@ -146,6 +157,7 @@ function normalizeConversation(conversation: ImageConversation & Record<string, 
           id: String(conversation.id || `${Date.now()}`),
           prompt: String(conversation.prompt || ""),
           model: (conversation.model as ImageModel) || "gpt-image-2",
+          stream: typeof conversation.stream === "boolean" ? conversation.stream : true,
           mode: conversation.mode === "edit" ? "edit" : "generate",
           referenceImages: getLegacyReferenceImages(conversation),
           count: Number(conversation.count || 1),
