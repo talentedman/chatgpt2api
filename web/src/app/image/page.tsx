@@ -126,14 +126,16 @@ async function recoverConversationHistory(items: ImageConversation[]) {
 
       const loadingCount = turn.images.filter((image) => image.status === "loading").length;
       if (loadingCount > 0) {
-        const message = "页面刷新或任务中断，未完成的图片已标记为失败";
+        const message = "检测到页面重载，任务恢复中...";
         changed = true;
         return {
           ...turn,
-          status: "error" as const,
-          error: message,
+          status: "queued" as const,
+          error: undefined,
           images: turn.images.map((image) =>
-            image.status === "loading" ? { ...image, status: "error" as const, error: message } : image,
+            image.status === "loading"
+              ? { ...image, status: "loading" as const, error: undefined, progress: message }
+              : image,
           ),
         };
       }
