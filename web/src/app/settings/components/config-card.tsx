@@ -23,6 +23,8 @@ export function ConfigCard() {
   const setImageRetentionDays = useSettingsStore((state) => state.setImageRetentionDays);
   const setAutoRemoveInvalidAccounts = useSettingsStore((state) => state.setAutoRemoveInvalidAccounts);
   const setAutoRemoveRateLimitedAccounts = useSettingsStore((state) => state.setAutoRemoveRateLimitedAccounts);
+  const setLogUpstreamHttp = useSettingsStore((state) => state.setLogUpstreamHttp);
+  const setLogUpstreamHttpFailedOnly = useSettingsStore((state) => state.setLogUpstreamHttpFailedOnly);
   const setLogLevel = useSettingsStore((state) => state.setLogLevel);
   const setProxy = useSettingsStore((state) => state.setProxy);
   const setBaseUrl = useSettingsStore((state) => state.setBaseUrl);
@@ -149,6 +151,21 @@ export function ConfigCard() {
               onCheckedChange={(checked) => setAutoRemoveRateLimitedAccounts(Boolean(checked))}
             />
             自动移除限流账号
+          </label>
+          <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-white px-4 py-3 text-sm text-stone-700">
+            <Checkbox
+              checked={Boolean(config?.log_upstream_http)}
+              onCheckedChange={(checked) => setLogUpstreamHttp(Boolean(checked))}
+            />
+            记录上游 ChatGPT 请求/响应日志（upstream_http）
+          </label>
+          <label className="flex items-center gap-3 rounded-xl border border-stone-200 bg-stone-50 px-4 py-3 text-sm text-stone-700 md:col-span-2 md:ml-8">
+            <Checkbox
+              checked={Boolean(config?.log_upstream_http_failed_only)}
+              onCheckedChange={(checked) => setLogUpstreamHttpFailedOnly(Boolean(checked))}
+              disabled={!Boolean(config?.log_upstream_http)}
+            />
+            仅记录失败请求（上游返回非 2xx/3xx 或请求报错）
           </label>
           <div className="space-y-3 rounded-xl border border-stone-200 bg-white px-4 py-3">
             <div>

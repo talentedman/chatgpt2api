@@ -60,6 +60,8 @@ export type SettingsConfig = {
   auto_remove_invalid_accounts?: boolean;
   auto_remove_rate_limited_accounts?: boolean;
   log_levels?: string[];
+  log_upstream_http?: boolean;
+  log_upstream_http_failed_only?: boolean;
   [key: string]: unknown;
 };
 

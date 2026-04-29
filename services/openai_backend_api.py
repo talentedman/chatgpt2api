@@ -3,6 +3,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional
@@ -11,6 +12,7 @@ from curl_cffi import requests
 from PIL import Image
 
 from services.account_service import account_service
+from services.log_service import append_upstream_http_trace, is_upstream_http_trace_enabled
 from services.proxy_service import proxy_settings
 from utils.helper import ensure_ok, iter_sse_payloads, new_uuid
 from utils.log import logger
@@ -32,6 +34,8 @@ DEFAULT_CLIENT_VERSION = "prod-be885abbfcfe7b1f511e88b3003d9ee44757fbad"
 DEFAULT_CLIENT_BUILD_NUMBER = "5955942"
 DEFAULT_POW_SCRIPT = "https://chatgpt.com/backend-api/sentinel/sdk.js"
 CODEX_IMAGE_MODEL = "codex-gpt-image-2"
+MAX_TRACE_TEXT_LENGTH = 20_000
+MAX_TRACE_BYTES_PREVIEW = 128
 
 
 class OpenAIBackendAPI:
@@ -124,6 +128,156 @@ class OpenAIBackendAPI:
         fp.setdefault("sec-ch-ua-mobile", "?0")
         fp.setdefault("sec-ch-ua-platform", '"Windows"')
         return fp
+
+    def _headers_dict(self, headers: object) -> dict[str, str]:
+        if not headers:
+            return {}
+        if isinstance(headers, dict):
+            return {str(key): str(value) for key, value in headers.items()}
+        try:
+            return {str(key): str(value) for key, value in dict(headers).items()}
+        except Exception:
+            return {"_raw": str(headers)}
+
+    def _truncate_text(self, value: object, limit: int = MAX_TRACE_TEXT_LENGTH) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}... (truncated, total_len={len(text)})"
+
+    def _request_body_for_trace(self, json_body: object = None, data_body: object = None) -> object:
+        if json_body is not None:
+            return json_body
+        if data_body is None:
+            return None
+        if isinstance(data_body, (bytes, bytearray)):
+            preview = base64.b64encode(bytes(data_body[:MAX_TRACE_BYTES_PREVIEW])).decode("ascii")
+            return {
+                "__type__": "bytes",
+                "size": len(data_body),
+                "preview_base64": preview,
+                "truncated": len(data_body) > MAX_TRACE_BYTES_PREVIEW,
+            }
+        if isinstance(data_body, str):
+            return self._truncate_text(data_body)
+        return self._truncate_text(data_body)
+
+    def _response_body_for_trace(self, response: requests.Response, stream: bool) -> object:
+        if stream:
+            return {"__type__": "stream", "captured": False}
+        content_type = str(response.headers.get("content-type") or response.headers.get("Content-Type") or "").lower()
+        if "application/json" in content_type:
+            try:
+                return response.json()
+            except Exception:
+                pass
+        try:
+            text = response.text
+        except Exception:
+            text = ""
+        if text:
+            return self._truncate_text(text)
+        try:
+            content = response.content
+        except Exception:
+            content = b""
+        if isinstance(content, (bytes, bytearray)):
+            preview = base64.b64encode(bytes(content[:MAX_TRACE_BYTES_PREVIEW])).decode("ascii")
+            return {
+                "__type__": "bytes",
+                "size": len(content),
+                "preview_base64": preview,
+                "truncated": len(content) > MAX_TRACE_BYTES_PREVIEW,
+            }
+        return None
+
+    def _trace_request(
+            self,
+            method: str,
+            url: str,
+            request_headers: object,
+            request_json: object = None,
+            request_data: object = None,
+            response: requests.Response | None = None,
+            error: str = "",
+            elapsed_ms: int = 0,
+            stream: bool = False,
+    ) -> None:
+        append_upstream_http_trace(
+            {
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "method": str(method).upper(),
+                "url": str(url),
+                "elapsed_ms": int(elapsed_ms),
+                "error": str(error or ""),
+                "request": {
+                    "headers": self._headers_dict(request_headers),
+                    "body": self._request_body_for_trace(request_json, request_data),
+                },
+                "response": {
+                    "status_code": int(response.status_code) if response is not None else None,
+                    "headers": self._headers_dict(response.headers if response is not None else {}),
+                    "body": self._response_body_for_trace(response, stream) if response is not None else None,
+                },
+            }
+        )
+
+    def _request(
+            self,
+            method: str,
+            url: str,
+            *,
+            headers: Optional[Dict[str, str]] = None,
+            json: object = None,
+            data: object = None,
+            timeout: float | tuple[float, float] = 30,
+            stream: bool = False,
+    ) -> requests.Response:
+        trace_enabled = is_upstream_http_trace_enabled()
+        if not trace_enabled:
+            return self.session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json,
+                data=data,
+                timeout=timeout,
+                stream=stream,
+            )
+        started = time.time()
+        try:
+            response = self.session.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json,
+                data=data,
+                timeout=timeout,
+                stream=stream,
+            )
+        except Exception as exc:
+            self._trace_request(
+                method=method,
+                url=url,
+                request_headers=headers,
+                request_json=json,
+                request_data=data,
+                error=str(exc),
+                elapsed_ms=int((time.time() - started) * 1000),
+                stream=stream,
+            )
+            raise
+        self._trace_request(
+            method=method,
+            url=url,
+            request_headers=headers,
+            request_json=json,
+            request_data=data,
+            response=response,
+            elapsed_ms=int((time.time() - started) * 1000),
+            stream=stream,
+        )
+        return response
 
     def _headers(self, path: str, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """构造请求头，并补上 web 端要求的 target path/route。"""
@@ -290,7 +444,8 @@ class OpenAIBackendAPI:
             "supported_encodings": ["v1"],
             "client_contextual_info": {"app_name": "chatgpt.com"},
         }
-        response = self.session.post(
+        response = self._request(
+            "POST",
             self.base_url + path,
             headers=self._image_headers(path, requirements),
             json=payload,
@@ -331,7 +486,8 @@ class OpenAIBackendAPI:
         width, height = image.size
         mime_type = Image.MIME.get(image.format, "image/png")
         path = "/backend-api/files"
-        response = self.session.post(
+        response = self._request(
+            "POST",
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
             json={"file_name": file_name, "file_size": len(data), "use_case": "multimodal", "width": width,
@@ -341,7 +497,8 @@ class OpenAIBackendAPI:
         ensure_ok(response, path)
         upload_meta = response.json()
         time.sleep(0.5)
-        response = self.session.put(
+        response = self._request(
+            "PUT",
             upload_meta["upload_url"],
             headers={
                 "Content-Type": mime_type,
@@ -358,7 +515,8 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, "image_upload")
         path = f"/backend-api/files/{upload_meta['file_id']}/uploaded"
-        response = self.session.post(
+        response = self._request(
+            "POST",
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
             data="{}",
@@ -437,7 +595,8 @@ class OpenAIBackendAPI:
             "force_parallel_switch": "auto",
         }
         path = "/backend-api/f/conversation"
-        response = self.session.post(
+        response = self._request(
+            "POST",
             self.base_url + path,
             headers=self._image_headers(path, requirements, conduit_token, "text/event-stream"),
             json=payload,
@@ -450,8 +609,12 @@ class OpenAIBackendAPI:
     def _get_conversation(self, conversation_id: str) -> Dict[str, Any]:
         """获取完整 conversation 详情。"""
         path = f"/backend-api/conversation/{conversation_id}"
-        response = self.session.get(self.base_url + path, headers=self._headers(path, {"Accept": "application/json"}),
-                                    timeout=60)
+        response = self._request(
+            "GET",
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=60,
+        )
         ensure_ok(response, path)
         return response.json()
 
@@ -591,8 +754,12 @@ class OpenAIBackendAPI:
     def _get_file_download_url(self, file_id: str) -> str:
         """获取文件下载地址。"""
         path = f"/backend-api/files/{file_id}/download"
-        response = self.session.get(self.base_url + path, headers=self._headers(path, {"Accept": "application/json"}),
-                                    timeout=60)
+        response = self._request(
+            "GET",
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=60,
+        )
         ensure_ok(response, path)
         data = response.json()
         return data.get("download_url") or data.get("url") or ""
@@ -600,8 +767,12 @@ class OpenAIBackendAPI:
     def _get_attachment_download_url(self, conversation_id: str, attachment_id: str) -> str:
         """通过 conversation 附件接口获取下载地址。"""
         path = f"/backend-api/conversation/{conversation_id}/attachment/{attachment_id}/download"
-        response = self.session.get(self.base_url + path, headers=self._headers(path, {"Accept": "application/json"}),
-                                    timeout=60)
+        response = self._request(
+            "GET",
+            self.base_url + path,
+            headers=self._headers(path, {"Accept": "application/json"}),
+            timeout=60,
+        )
         ensure_ok(response, path)
         data = response.json()
         return data.get("download_url") or data.get("url") or ""
@@ -700,7 +871,7 @@ class OpenAIBackendAPI:
     def download_image_bytes(self, urls: list[str]) -> list[bytes]:
         images = []
         for url in urls:
-            response = self.session.get(url, timeout=120)
+            response = self._request("GET", url, timeout=120)
             ensure_ok(response, "image_download")
             images.append(response.content)
         return images
@@ -723,7 +894,8 @@ class OpenAIBackendAPI:
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
         payload = self._conversation_payload(normalized, model, timezone)
-        response = self.session.post(
+        response = self._request(
+            "POST",
             self.base_url + path,
             headers=self._conversation_headers(path, requirements),
             json=payload,
@@ -756,7 +928,8 @@ class OpenAIBackendAPI:
 
     def _bootstrap(self) -> None:
         """预热首页，并提取 PoW 相关脚本引用。"""
-        response = self.session.get(
+        response = self._request(
+            "GET",
             self.base_url + "/",
             headers=self._bootstrap_headers(),
             timeout=30,
@@ -771,7 +944,8 @@ class OpenAIBackendAPI:
         path = "/backend-api/sentinel/chat-requirements" if self.access_token else "/backend-anon/sentinel/chat-requirements"
         context = "auth_chat_requirements" if self.access_token else "noauth_chat_requirements"
         body = {"p": build_legacy_requirements_token(self.user_agent, self.pow_script_sources, self.pow_data_build)}
-        response = self.session.post(
+        response = self._request(
+            "POST",
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json"}),
             json=body,
@@ -797,7 +971,8 @@ class OpenAIBackendAPI:
         )
         route = "/backend-api/models" if self.access_token else "/backend-anon/models"
         context = "auth_models" if self.access_token else "anon_models"
-        response = self.session.get(
+        response = self._request(
+            "GET",
             self.base_url + path,
             headers=self._headers(route),
             timeout=30,

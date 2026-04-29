@@ -11,5 +11,7 @@
     "warning"
   ],
   "proxy": "",
-  "base_url": ""
+  "base_url": "",
+  "log_upstream_http": false,
+  "log_upstream_http_failed_only": false
 }

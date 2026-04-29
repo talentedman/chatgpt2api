@@ -48,6 +48,14 @@ function getStatus(item: SystemLog) {
   return "-";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRecordArray(value: unknown): value is Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.every((item) => isRecord(item));
+}
+
 function LogsContent() {
   const [items, setItems] = useState<SystemLog[]>([]);
   const [type, setType] = useState(LogType.Call);
@@ -61,6 +69,7 @@ function LogsContent() {
   const [isLoading, setIsLoading] = useState(true);
   const detailUrls = getUrls(detailLog);
   const detailImages = detailUrls.map((url, index) => ({ id: `${index}`, src: url }));
+  const upstreamHttp = isRecordArray(detailLog?.detail?.upstream_http) ? detailLog.detail.upstream_http : [];
   const isCallLog = type === LogType.Call;
   const pageSize = 10;
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
@@ -180,40 +189,78 @@ function LogsContent() {
         </CardContent>
       </Card>
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="w-[min(92vw,920px)] rounded-2xl p-6">
-          <DialogHeader>
+        <DialogContent className="!max-h-[92vh] w-[min(96vw,1200px)] !flex !flex-col !gap-0 overflow-hidden rounded-2xl p-0">
+          <DialogHeader className="border-b border-stone-200 px-6 py-4 pr-12">
             <DialogTitle>日志详情</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-3 rounded-xl border border-stone-200 bg-white p-4 text-sm text-stone-600 md:grid-cols-2">
-            {Object.entries(detailLog?.detail || {})
-              .filter(([key, value]) => key !== "urls" && typeof value !== "object")
-              .map(([key, value]) => (
-                <div key={key} className="flex items-start justify-between gap-4">
-                  <span className="text-stone-400">{key}</span>
-                  <span className="text-right font-medium text-stone-700">{String(value)}</span>
-                </div>
-              ))}
-          </div>
-          {detailUrls.length ? (
-            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
-              {detailUrls.map((url, index) => (
-                <button
-                  key={url}
-                  type="button"
-                  className="aspect-square overflow-hidden rounded-xl border border-stone-200 bg-stone-100"
-                  onClick={() => {
-                    setLightboxIndex(index);
-                    setLightboxOpen(true);
-                  }}
-                >
-                  <img src={url} alt="" className="h-full w-full object-cover" />
-                </button>
-              ))}
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 pb-6 pt-4">
+            <div className="grid gap-3 rounded-xl border border-stone-200 bg-white p-4 text-sm text-stone-600 md:grid-cols-2">
+              {Object.entries(detailLog?.detail || {})
+                .filter(([key, value]) => key !== "urls" && typeof value !== "object")
+                .map(([key, value]) => (
+                  <div key={key} className="flex items-start justify-between gap-4">
+                    <span className="text-stone-400">{key}</span>
+                    <span className="text-right font-medium text-stone-700">{String(value)}</span>
+                  </div>
+                ))}
             </div>
-          ) : null}
-          <pre className="max-h-[72vh] overflow-auto rounded-xl border border-stone-200 bg-stone-50 p-4 text-xs leading-6 text-stone-700">
-            {JSON.stringify(detailLog?.detail || {}, null, 2)}
-          </pre>
+            {detailUrls.length ? (
+              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+                {detailUrls.map((url, index) => (
+                  <button
+                    key={url}
+                    type="button"
+                    className="aspect-square overflow-hidden rounded-xl border border-stone-200 bg-stone-100"
+                    onClick={() => {
+                      setLightboxIndex(index);
+                      setLightboxOpen(true);
+                    }}
+                  >
+                    <img src={url} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {isRecord(detailLog?.detail?.request) ? (
+              <details open className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-stone-700">请求详情</summary>
+                <pre className="mt-3 overflow-x-auto rounded-lg border border-stone-200 bg-white p-4 text-xs leading-6 text-stone-700">
+                  {JSON.stringify(detailLog?.detail?.request || {}, null, 2)}
+                </pre>
+              </details>
+            ) : null}
+            {isRecord(detailLog?.detail?.response) ? (
+              <details open className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-stone-700">响应详情</summary>
+                <pre className="mt-3 overflow-x-auto rounded-lg border border-stone-200 bg-white p-4 text-xs leading-6 text-stone-700">
+                  {JSON.stringify(detailLog?.detail?.response || {}, null, 2)}
+                </pre>
+              </details>
+            ) : null}
+            {upstreamHttp.length ? (
+              <details open className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-stone-700">上游 ChatGPT 交互详情（{upstreamHttp.length} 条）</summary>
+                <div className="mt-3 space-y-3">
+                  {upstreamHttp.map((item, index) => (
+                    <details key={index} open className="rounded-lg border border-stone-200 bg-white p-3">
+                      <summary className="cursor-pointer text-xs font-medium text-stone-700">
+                        {`${String(item.method || "-")} ${String(item.url || "-")}  [${String(item.response && isRecord(item.response) ? item.response.status_code ?? "-" : "-")}]`}
+                      </summary>
+                      <pre className="mt-3 overflow-x-auto rounded-lg border border-stone-200 bg-stone-50 p-3 text-xs leading-6 text-stone-700">
+                        {JSON.stringify(item, null, 2)}
+                      </pre>
+                    </details>
+                  ))}
+                </div>
+              </details>
+            ) : null}
+            <details className="rounded-xl border border-stone-200 bg-stone-50 p-3">
+              <summary className="cursor-pointer text-sm font-medium text-stone-700">完整日志 JSON（展开查看）</summary>
+              <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-4 text-xs leading-6 text-stone-700">
+                {JSON.stringify(detailLog?.detail || {}, null, 2)}
+              </pre>
+            </details>
+          </div>
         </DialogContent>
       </Dialog>
       <ImageLightbox

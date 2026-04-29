@@ -16,6 +16,10 @@ from services.protocol import (
 )
 
 
+def _request_headers(request: Request) -> dict[str, str]:
+    return {str(key): str(value) for key, value in request.headers.items()}
+
+
 class ImageGenerationRequest(BaseModel):
     prompt: str = Field(..., min_length=1)
     model: str = "gpt-image-2"
@@ -73,7 +77,14 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         payload["base_url"] = resolve_image_base_url(request)
-        call = LoggedCall(identity, "/v1/images/generations", body.model, "文生图")
+        call = LoggedCall(
+            identity,
+            "/v1/images/generations",
+            body.model,
+            "文生图",
+            request_headers=_request_headers(request),
+            request_body=payload,
+        )
         return await call.run(openai_v1_image_generations.handle, payload)
 
     @router.post("/v1/images/edits")
@@ -111,27 +122,57 @@ def create_router() -> APIRouter:
             "stream": stream,
             "base_url": resolve_image_base_url(request),
         }
-        call = LoggedCall(identity, "/v1/images/edits", model, "图生图")
+        call = LoggedCall(
+            identity,
+            "/v1/images/edits",
+            model,
+            "图生图",
+            request_headers=_request_headers(request),
+            request_body=payload,
+        )
         return await call.run(openai_v1_image_edit.handle, payload)
 
     @router.post("/v1/chat/completions")
-    async def create_chat_completion(body: ChatCompletionRequest, authorization: str | None = Header(default=None)):
+    async def create_chat_completion(
+            body: ChatCompletionRequest,
+            request: Request,
+            authorization: str | None = Header(default=None),
+    ):
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成")
+        call = LoggedCall(
+            identity,
+            "/v1/chat/completions",
+            model,
+            "文本生成",
+            request_headers=_request_headers(request),
+            request_body=payload,
+        )
         return await call.run(openai_v1_chat_complete.handle, payload)
 
     @router.post("/v1/responses")
-    async def create_response(body: ResponseCreateRequest, authorization: str | None = Header(default=None)):
+    async def create_response(
+            body: ResponseCreateRequest,
+            request: Request,
+            authorization: str | None = Header(default=None),
+    ):
         identity = require_identity(authorization)
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/responses", model, "Responses")
+        call = LoggedCall(
+            identity,
+            "/v1/responses",
+            model,
+            "Responses",
+            request_headers=_request_headers(request),
+            request_body=payload,
+        )
         return await call.run(openai_v1_response.handle, payload)
 
     @router.post("/v1/messages")
     async def create_message(
+            request: Request,
             body: AnthropicMessageRequest,
             authorization: str | None = Header(default=None),
             x_api_key: str | None = Header(default=None, alias="x-api-key"),
@@ -140,7 +181,14 @@ def create_router() -> APIRouter:
         identity = require_identity(authorization or (f"Bearer {x_api_key}" if x_api_key else None))
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
-        call = LoggedCall(identity, "/v1/messages", model, "Messages")
+        call = LoggedCall(
+            identity,
+            "/v1/messages",
+            model,
+            "Messages",
+            request_headers=_request_headers(request),
+            request_body=payload,
+        )
         return await call.run(anthropic_v1_messages.handle, payload, sse="anthropic")
 
     return router

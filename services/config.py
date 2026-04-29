@@ -133,6 +133,20 @@ class ConfigStore:
         return [level for item in levels if (level := str(item or "").strip().lower()) in allowed]
 
     @property
+    def log_upstream_http(self) -> bool:
+        value = self.data.get("log_upstream_http", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
+    def log_upstream_http_failed_only(self) -> bool:
+        value = self.data.get("log_upstream_http_failed_only", False)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    @property
     def images_dir(self) -> Path:
         path = DATA_DIR / "images"
         path.mkdir(parents=True, exist_ok=True)
@@ -175,6 +189,8 @@ class ConfigStore:
         data["auto_remove_invalid_accounts"] = self.auto_remove_invalid_accounts
         data["auto_remove_rate_limited_accounts"] = self.auto_remove_rate_limited_accounts
         data["log_levels"] = self.log_levels
+        data["log_upstream_http"] = self.log_upstream_http
+        data["log_upstream_http_failed_only"] = self.log_upstream_http_failed_only
         data.pop("auth-key", None)
         return data
 
