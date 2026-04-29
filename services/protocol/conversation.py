@@ -349,7 +349,8 @@ def add_unique(values: list[str], candidates: list[str]) -> None:
 def extract_conversation_ids(payload: str) -> tuple[str, list[str], list[str]]:
     conversation_match = re.search(r'"conversation_id"\s*:\s*"([^"]+)"', payload)
     conversation_id = conversation_match.group(1) if conversation_match else ""
-    file_ids = re.findall(r"(file[-_][A-Za-z0-9]+)", payload)
+    file_ids = re.findall(r"file-service://([A-Za-z0-9_-]+)", payload)
+    add_unique(file_ids, re.findall(r"(file[-_][A-Za-z0-9_-]+)", payload))
     sediment_ids = re.findall(r"sediment://([A-Za-z0-9_-]+)", payload)
     return conversation_id, file_ids, sediment_ids
 
@@ -518,7 +519,7 @@ def stream_image_outputs(
     file_ids = [str(item) for item in last.get("file_ids") or []]
     sediment_ids = [str(item) for item in last.get("sediment_ids") or []]
     message = str(last.get("text") or "").strip()
-    is_text_response = last.get("tool_invoked") is False or last.get("turn_use_case") == "text"
+    is_text_response = last.get("turn_use_case") == "text"
     logger.info({
         "event": "image_stream_resolve_start",
         "conversation_id": conversation_id,
@@ -531,7 +532,7 @@ def stream_image_outputs(
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message)
         return
 
-    image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
+    image_urls, assistant_message = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
     if image_urls:
         image_items = [
             {"b64_json": base64.b64encode(image_data).decode("ascii")}
@@ -547,6 +548,19 @@ def stream_image_outputs(
         if data:
             yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data)
         return
+
+    if not message and assistant_message:
+        message = str(assistant_message).strip()
+
+    if not message and conversation_id:
+        message = backend.resolve_conversation_assistant_message(conversation_id).strip()
+        if message:
+            logger.info(
+                {
+                    "event": "image_stream_resolve_assistant_message",
+                    "conversation_id": conversation_id,
+                }
+            )
 
     if message:
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message)

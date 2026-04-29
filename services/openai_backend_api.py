@@ -460,6 +460,24 @@ class OpenAIBackendAPI:
         mapping = data.get("mapping") or {}
         file_pat = re.compile(r"file-service://([A-Za-z0-9_-]+)")
         sed_pat = re.compile(r"sediment://([A-Za-z0-9_-]+)")
+
+        def collect_asset_ids(value: Any, file_ids: list[str], sediment_ids: list[str]) -> None:
+            if isinstance(value, str):
+                for hit in file_pat.findall(value):
+                    if hit not in file_ids:
+                        file_ids.append(hit)
+                for hit in sed_pat.findall(value):
+                    if hit not in sediment_ids:
+                        sediment_ids.append(hit)
+                return
+            if isinstance(value, list):
+                for item in value:
+                    collect_asset_ids(item, file_ids, sediment_ids)
+                return
+            if isinstance(value, dict):
+                for item in value.values():
+                    collect_asset_ids(item, file_ids, sediment_ids)
+
         records = []
         for message_id, node in mapping.items():
             message = (node or {}).get("message") or {}
@@ -470,24 +488,71 @@ class OpenAIBackendAPI:
                 continue
             if metadata.get("async_task_type") != "image_gen":
                 continue
-            if content.get("content_type") != "multimodal_text":
-                continue
             file_ids, sediment_ids = [], []
-            for part in content.get("parts") or []:
-                text = (part.get("asset_pointer") or "") if isinstance(part, dict) else (
-                    part if isinstance(part, str) else "")
-                for hit in file_pat.findall(text):
-                    if hit not in file_ids:
-                        file_ids.append(hit)
-                for hit in sed_pat.findall(text):
-                    if hit not in sediment_ids:
-                        sediment_ids.append(hit)
+            collect_asset_ids(content, file_ids, sediment_ids)
             records.append(
                 {"message_id": message_id, "create_time": message.get("create_time") or 0, "file_ids": file_ids,
                  "sediment_ids": sediment_ids})
         return sorted(records, key=lambda item: item["create_time"])
 
-    def _poll_image_results(self, conversation_id: str, timeout_secs: float = 120.0) -> tuple[list[str], list[str]]:
+    def _extract_latest_assistant_message(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """从 conversation 明细中提取最新 assistant 文本及元数据。"""
+        mapping = data.get("mapping") or {}
+        candidates: list[tuple[float, str, bool]] = []
+        for node in mapping.values():
+            message = (node or {}).get("message") or {}
+            if not isinstance(message, dict):
+                continue
+            author = message.get("author") or {}
+            if author.get("role") != "assistant":
+                continue
+            content = message.get("content") or {}
+            if not isinstance(content, dict):
+                continue
+            parts = content.get("parts")
+            if not isinstance(parts, list):
+                continue
+            text = "".join(part for part in parts if isinstance(part, str)).strip()
+            if not text:
+                continue
+            metadata = message.get("metadata") or {}
+            try:
+                created = float(message.get("create_time") or 0.0)
+            except Exception:
+                created = 0.0
+            candidates.append((created, text, bool(metadata.get("is_error"))))
+        if not candidates:
+            return {"text": "", "is_error": False}
+        candidates.sort(key=lambda item: item[0])
+        latest = candidates[-1]
+        return {"text": latest[1], "is_error": latest[2]}
+
+    def _extract_latest_assistant_text(self, data: Dict[str, Any]) -> str:
+        """从 conversation 明细中提取最新 assistant 文本。"""
+        latest = self._extract_latest_assistant_message(data)
+        return str(latest.get("text") or "")
+
+    def resolve_conversation_assistant_message(self, conversation_id: str) -> str:
+        """读取 conversation，获取最新 assistant 文本（常用于策略拒绝文案回传）。"""
+        conversation_id = str(conversation_id or "").strip()
+        if not conversation_id:
+            return ""
+        try:
+            conversation = self._get_conversation(conversation_id)
+        except Exception as exc:
+            logger.debug(
+                {
+                    "event": "conversation_message_resolve_failed",
+                    "conversation_id": conversation_id,
+                    "error": str(exc),
+                }
+            )
+            return ""
+        return self._extract_latest_assistant_text(conversation)
+
+    def _poll_image_results(
+            self, conversation_id: str, timeout_secs: float = 120.0
+    ) -> tuple[list[str], list[str], str]:
         """轮询 conversation，直到拿到图片文件 id 或超时。"""
         start = time.time()
         attempt = 0
@@ -506,14 +571,22 @@ class OpenAIBackendAPI:
             logger.debug({"event": "image_poll_check", "conversation_id": conversation_id, "attempt": attempt, "file_ids": file_ids, "sediment_ids": sediment_ids})
             if file_ids:
                 logger.info({"event": "image_poll_hit", "conversation_id": conversation_id, "file_ids": file_ids, "sediment_ids": sediment_ids})
-                return file_ids, sediment_ids
+                return file_ids, sediment_ids, ""
             if sediment_ids:
                 logger.info({"event": "image_poll_hit", "conversation_id": conversation_id, "file_ids": [], "sediment_ids": sediment_ids})
-                return [], sediment_ids
+                return [], sediment_ids, ""
+            assistant_message = self._extract_latest_assistant_message(conversation)
+            if assistant_message.get("text") and assistant_message.get("is_error"):
+                logger.info({
+                    "event": "image_poll_assistant_error_hit",
+                    "conversation_id": conversation_id,
+                    "attempt": attempt,
+                })
+                return [], [], str(assistant_message.get("text") or "")
             logger.debug({"event": "image_poll_wait", "conversation_id": conversation_id, "elapsed_secs": round(time.time() - start, 1)})
             time.sleep(4)
         logger.info({"event": "image_poll_timeout", "conversation_id": conversation_id, "timeout_secs": timeout_secs})
-        return [], []
+        return [], [], ""
 
     def _get_file_download_url(self, file_id: str) -> str:
         """获取文件下载地址。"""
@@ -611,15 +684,18 @@ class OpenAIBackendAPI:
             file_ids: list[str],
             sediment_ids: list[str],
             poll: bool = True,
-    ) -> list[str]:
+    ) -> tuple[list[str], str]:
         file_ids = [item for item in file_ids if item != "file_upload"]
         sediment_ids = list(sediment_ids)
+        assistant_message = ""
         if poll and conversation_id and not file_ids and not sediment_ids:
             logger.info({"event": "image_resolve_poll_needed", "conversation_id": conversation_id})
-            polled_file_ids, polled_sediment_ids = self._poll_image_results(conversation_id)
+            polled_file_ids, polled_sediment_ids, assistant_message = self._poll_image_results(conversation_id)
             file_ids.extend(item for item in polled_file_ids if item and item not in file_ids)
             sediment_ids.extend(item for item in polled_sediment_ids if item and item not in sediment_ids)
-        return self._resolve_image_urls(conversation_id, file_ids, sediment_ids)
+            if assistant_message and not file_ids and not sediment_ids:
+                return [], assistant_message
+        return self._resolve_image_urls(conversation_id, file_ids, sediment_ids), assistant_message
 
     def download_image_bytes(self, urls: list[str]) -> list[bytes]:
         images = []
