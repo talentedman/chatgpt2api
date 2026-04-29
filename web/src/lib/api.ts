@@ -71,6 +71,8 @@ export type ManagedImage = {
   url: string;
   created_at: string;
   prompt?: string;
+  request_type?: "generation" | "edit" | string;
+  reference_image_url?: string;
 };
 
 export type SystemLog = {

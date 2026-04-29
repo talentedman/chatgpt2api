@@ -33,6 +33,9 @@ function ImageManagerContent() {
   const [endDate, setEndDate] = useState("");
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxItems, setLightboxItems] = useState<
+    Array<{ id: string; src: string; sizeLabel?: string; dimensions?: string; prompt?: string }>
+  >([]);
   const [page, setPage] = useState(1);
   const [dimensions, setDimensions] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -54,6 +57,17 @@ function ImageManagerContent() {
   const currentPagePaths = currentRows.map((item) => item.path).filter(Boolean);
   const allCurrentPageSelected =
     currentPagePaths.length > 0 && currentPagePaths.every((path) => selectedPaths.includes(path));
+
+  const openLightbox = (
+    images: Array<{ id: string; src: string; sizeLabel?: string; dimensions?: string; prompt?: string }>,
+    index: number,
+  ) => {
+    if (!images.length) return;
+    const safeIndex = Math.max(0, Math.min(index, images.length - 1));
+    setLightboxItems(images);
+    setLightboxIndex(safeIndex);
+    setLightboxOpen(true);
+  };
 
   const loadImages = async () => {
     setIsLoading(true);
@@ -180,6 +194,8 @@ function ImageManagerContent() {
               const imagePath = item.path || item.name;
               const selected = selectedPaths.includes(imagePath);
               const deleting = deletingPathSet.has(imagePath);
+              const promptText = String(item.prompt || "").trim();
+              const showReferenceImage = item.request_type === "edit" && Boolean(item.reference_image_url);
               return (
                 <div key={item.url} className="group border-r border-b border-stone-100 p-4 transition hover:bg-stone-50">
                   <div className="relative">
@@ -187,8 +203,7 @@ function ImageManagerContent() {
                       type="button"
                       className="relative block aspect-square w-full cursor-zoom-in overflow-hidden rounded-lg bg-stone-100 text-left"
                       onClick={() => {
-                        setLightboxIndex(imageIndex);
-                        setLightboxOpen(true);
+                        openLightbox(lightboxImages, imageIndex);
                       }}
                     >
                       <img
@@ -249,8 +264,47 @@ function ImageManagerContent() {
                       <span>{formatSize(item.size)}</span>
                       <span>{dimensions[item.url] || "-"}</span>
                     </div>
+                    {showReferenceImage ? (
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-stone-500">参考图：</div>
+                        <button
+                          type="button"
+                          className="group relative block h-24 w-24 cursor-zoom-in overflow-hidden rounded-md border border-stone-200 bg-stone-100 text-left"
+                          onClick={() =>
+                            openLightbox(
+                              [{ id: `${imagePath}-reference`, src: String(item.reference_image_url || ""), prompt: promptText }],
+                              0,
+                            )
+                          }
+                        >
+                          <img
+                            src={item.reference_image_url}
+                            alt="参考图"
+                            className="h-24 w-24 object-cover transition group-hover:scale-[1.02]"
+                          />
+                          <span className="absolute right-1.5 bottom-1.5 rounded-full bg-black/50 p-1 text-white opacity-0 transition group-hover:opacity-100">
+                            <Maximize2 className="size-3.5" />
+                          </span>
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="rounded-md border border-stone-200 bg-stone-50 px-2 py-1.5 text-[11px] leading-4 text-stone-600">
-                      <span className="font-medium text-stone-500">提示词：</span>
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="font-medium text-stone-500">提示词：</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 rounded-md px-2 text-[11px] text-stone-500 hover:bg-stone-100"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(promptText);
+                            toast.success("提示词已复制");
+                          }}
+                          disabled={!promptText}
+                        >
+                          <Copy className="size-3.5" />
+                          复制
+                        </Button>
+                      </div>
                       <span
                         style={{
                           display: "-webkit-box",
@@ -259,7 +313,7 @@ function ImageManagerContent() {
                           overflow: "hidden",
                         }}
                       >
-                        {item.prompt || "（暂无记录）"}
+                        {promptText || "（暂无记录）"}
                       </span>
                     </div>
                   </div>
@@ -280,7 +334,7 @@ function ImageManagerContent() {
         </CardContent>
       </Card>
       <ImageLightbox
-        images={lightboxImages}
+        images={lightboxItems}
         currentIndex={lightboxIndex}
         open={lightboxOpen}
         onOpenChange={setLightboxOpen}

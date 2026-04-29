@@ -63,6 +63,8 @@ def save_image_bytes(
     base_url: str | None = None,
     prompt: str = "",
     revised_prompt: str = "",
+    request_type: str = "generation",
+    reference_image_url: str = "",
 ) -> str:
     config.cleanup_old_images()
     file_hash = hashlib.md5(image_data).hexdigest()
@@ -80,6 +82,8 @@ def save_image_bytes(
                     "prompt": prompt_text,
                     "original_prompt": str(prompt or "").strip(),
                     "revised_prompt": str(revised_prompt or "").strip(),
+                    "request_type": str(request_type or "generation").strip() or "generation",
+                    "reference_image_url": str(reference_image_url or "").strip(),
                     "created_at": int(time.time()),
                 },
                 ensure_ascii=False,
@@ -89,6 +93,33 @@ def save_image_bytes(
         )
     except Exception:
         pass
+    return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
+
+
+def save_reference_image(
+    reference_image: str,
+    base_url: str | None = None,
+) -> str:
+    text = str(reference_image or "").strip()
+    if not text:
+        return ""
+    payload = text.split(",", 1)[1] if text.startswith("data:") and "," in text else text
+    try:
+        image_data = base64.b64decode(payload)
+    except Exception:
+        return ""
+    if not image_data:
+        return ""
+    config.cleanup_old_images()
+    file_hash = hashlib.md5(image_data).hexdigest()
+    relative_dir = Path("references", file_hash[:2], file_hash[2:4])
+    filename = f"reference_{file_hash}.png"
+    file_path = config.images_dir / relative_dir / filename
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    if file_path.exists():
+        file_path.touch()
+    else:
+        file_path.write_bytes(image_data)
     return f"{(base_url or config.base_url)}/images/{relative_dir.as_posix()}/{filename}"
 
 
@@ -176,7 +207,15 @@ def format_image_result(
     base_url: str | None = None,
     created: int | None = None,
     message: str = "",
+    request_type: str = "generation",
+    reference_image: str = "",
 ) -> dict[str, Any]:
+    normalized_request_type = str(request_type or "generation").strip() or "generation"
+    reference_image_url = (
+        save_reference_image(reference_image, base_url)
+        if normalized_request_type == "edit" and str(reference_image or "").strip()
+        else ""
+    )
     data: list[dict[str, Any]] = []
     for item in items:
         b64_json = str(item.get("b64_json") or "").strip()
@@ -186,12 +225,26 @@ def format_image_result(
         if response_format == "b64_json":
             data.append({
                 "b64_json": b64_json,
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url, prompt, revised_prompt),
+                "url": save_image_bytes(
+                    base64.b64decode(b64_json),
+                    base_url,
+                    prompt,
+                    revised_prompt,
+                    normalized_request_type,
+                    reference_image_url,
+                ),
                 "revised_prompt": revised_prompt,
             })
         else:
             data.append({
-                "url": save_image_bytes(base64.b64decode(b64_json), base_url, prompt, revised_prompt),
+                "url": save_image_bytes(
+                    base64.b64decode(b64_json),
+                    base_url,
+                    prompt,
+                    revised_prompt,
+                    normalized_request_type,
+                    reference_image_url,
+                ),
                 "revised_prompt": revised_prompt,
             })
     result: dict[str, Any] = {"created": created or int(time.time()), "data": data}
@@ -544,6 +597,8 @@ def stream_image_outputs(
             request.response_format,
             request.base_url,
             int(time.time()),
+            request_type="edit" if request.images else "generation",
+            reference_image=str(request.images[0] or "") if request.images else "",
         )["data"]
         if data:
             yield ImageOutput(kind="result", model=request.model, index=index, total=total, data=data)

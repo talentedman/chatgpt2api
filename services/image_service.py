@@ -23,22 +23,19 @@ def _meta_file(path: Path) -> Path:
     return Path(f"{path.as_posix()}.meta.json")
 
 
-def _read_prompt(path: Path) -> str:
+def _read_meta(path: Path) -> dict[str, object]:
     meta_path = _meta_file(path)
     if not meta_path.exists() or not meta_path.is_file():
-        return ""
+        return {}
     try:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception:
-        return ""
-    if not isinstance(data, dict):
-        return ""
-    return str(
-        data.get("prompt")
-        or data.get("revised_prompt")
-        or data.get("original_prompt")
-        or "",
-    ).strip()
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _read_prompt(meta: dict[str, object]) -> str:
+    return str(meta.get("prompt") or meta.get("revised_prompt") or meta.get("original_prompt") or "").strip()
 
 
 def _normalize_relative_path(raw: str) -> str:
@@ -53,6 +50,18 @@ def _normalize_relative_path(raw: str) -> str:
     return Path(text).as_posix().lstrip("/")
 
 
+def _resolve_reference_url(raw: object, base_url: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text.startswith("http://") or text.startswith("https://") or text.startswith("data:"):
+        return text
+    rel = _normalize_relative_path(text)
+    if not rel:
+        return ""
+    return f"{base_url.rstrip('/')}/images/{rel}"
+
+
 def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict[str, object]:
     config.cleanup_old_images()
     items = []
@@ -61,6 +70,12 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict
         if not _is_image_file(path):
             continue
         rel = path.relative_to(root).as_posix()
+        if rel.startswith("references/"):
+            continue
+        meta = _read_meta(path)
+        request_type = str(meta.get("request_type") or "").strip().lower()
+        if request_type not in {"generation", "edit"}:
+            request_type = "edit" if meta.get("reference_image_url") else "generation"
         parts = rel.split("/")
         day = "-".join(parts[:3]) if len(parts) >= 4 else datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d")
         if start_date and day < start_date:
@@ -74,7 +89,9 @@ def list_images(base_url: str, start_date: str = "", end_date: str = "") -> dict
             "size": path.stat().st_size,
             "url": f"{base_url.rstrip('/')}/images/{rel}",
             "created_at": datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
-            "prompt": _read_prompt(path),
+            "prompt": _read_prompt(meta),
+            "request_type": request_type,
+            "reference_image_url": _resolve_reference_url(meta.get("reference_image_url"), base_url),
         })
     items.sort(key=lambda item: str(item["created_at"]), reverse=True)
     groups: dict[str, list[dict[str, object]]] = {}
