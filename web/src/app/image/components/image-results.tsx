@@ -145,6 +145,66 @@ export function ImageResults({
                   ) : null}
                 </div>
 
+                {(() => {
+                  if (turn.status === "queued") {
+                    return (
+                      <div className="mb-4 w-full rounded-lg border border-stone-200/80 bg-white/90 px-3 py-2 text-xs text-stone-600">
+                        <p className="whitespace-pre-wrap break-words">已加入当前对话队列...</p>
+                      </div>
+                    );
+                  }
+
+                  // Show payload/upstream info during and after generation
+                  if (turn.status !== "success" && turn.status !== "error" && turn.status !== "generating") {
+                    return null;
+                  }
+
+                  const imagesWithPayload = turn.images
+                    .map((image, index) => ({ image, index }))
+                    .filter(({ image }) => image.upstreamPayload || image.progressEventType);
+                  if (imagesWithPayload.length === 0) {
+                    return null;
+                  }
+
+                  if (imagesWithPayload.length === 1) {
+                    const { image } = imagesWithPayload[0];
+                    return (
+                      <div className="mb-4 w-full rounded-lg border border-stone-200/80 bg-white/90 px-3 py-2 text-xs text-stone-600">
+                        {image.upstreamPayload ? (
+                          <p className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-stone-500">
+                            {image.upstreamPayload}
+                          </p>
+                        ) : null}
+                        {image.progressEventType ? (
+                          <p className="mt-1 text-[11px] text-stone-400">
+                            上游过程：{formatUpstreamEventTrail(image.progressEventType)}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="mb-4 w-full space-y-2 rounded-lg border border-stone-200/80 bg-white/90 px-3 py-2 text-xs text-stone-600">
+                      {imagesWithPayload.map(({ image, index }) => (
+                        <div key={image.id}>
+                          <span className="text-stone-400">图 {index + 1}</span>
+                          {image.upstreamPayload ? (
+                            <p className="mt-0.5 whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-stone-500">
+                              {image.upstreamPayload}
+                            </p>
+                          ) : null}
+                          {image.progressEventType ? (
+                            <p className="mt-0.5 text-[11px] text-stone-400">
+                              上游过程：{formatUpstreamEventTrail(image.progressEventType)}
+                            </p>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
                 <div className="columns-1 gap-4 space-y-4 sm:columns-2 xl:columns-3">
                   {turn.images.map((image, index) => {
                     if (image.status === "success" && image.b64_json) {
@@ -219,20 +279,8 @@ export function ImageResults({
                     return (
                       <div
                         key={image.id}
-                        className="break-inside-avoid space-y-2"
+                        className="break-inside-avoid"
                       >
-                        <div className="rounded-lg border border-stone-200/80 bg-white/90 px-3 py-2 text-xs text-stone-600">
-                          <p className="whitespace-pre-wrap break-words">
-                            {turn.status === "queued"
-                              ? "已加入当前对话队列..."
-                              : image.progress?.trim() || "正在处理图片..."}
-                          </p>
-                          {turn.status !== "queued" && image.progressEventType ? (
-                            <p className="mt-1 text-[11px] text-stone-400">
-                              上游过程：{formatUpstreamEventTrail(image.progressEventType)}
-                            </p>
-                          ) : null}
-                        </div>
                         <div
                           className={cn(
                             "overflow-hidden border border-stone-200/80 bg-stone-100/80",
@@ -252,6 +300,11 @@ export function ImageResults({
                                 <LoaderCircle className="size-5 animate-spin" />
                               )}
                             </div>
+                            {image.progress ? (
+                              <p className="mt-3 text-[11px] leading-relaxed text-stone-400 whitespace-pre-wrap">
+                                {image.progress}
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       </div>

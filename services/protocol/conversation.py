@@ -573,6 +573,7 @@ def stream_image_outputs(
     sediment_ids = [str(item) for item in last.get("sediment_ids") or []]
     message = str(last.get("text") or "").strip()
     is_text_response = last.get("turn_use_case") == "text"
+    no_image_tool_invoked = last.get("tool_invoked") is False
     logger.info({
         "event": "image_stream_resolve_start",
         "conversation_id": conversation_id,
@@ -581,12 +582,28 @@ def stream_image_outputs(
         "tool_invoked": last.get("tool_invoked"),
         "turn_use_case": last.get("turn_use_case"),
     })
-    if message and not file_ids and not sediment_ids and (last.get("blocked") or is_text_response):
+    if message and not file_ids and not sediment_ids and (
+        last.get("blocked") or is_text_response or no_image_tool_invoked
+    ):
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message)
         return
 
+    yield ImageOutput(
+        kind="progress",
+        model=request.model,
+        index=index,
+        total=total,
+        upstream_event_type="resolving_image",
+    )
     image_urls, assistant_message = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
     if image_urls:
+        yield ImageOutput(
+            kind="progress",
+            model=request.model,
+            index=index,
+            total=total,
+            upstream_event_type="downloading_image",
+        )
         image_items = [
             {"b64_json": base64.b64encode(image_data).decode("ascii")}
             for image_data in backend.download_image_bytes(image_urls)

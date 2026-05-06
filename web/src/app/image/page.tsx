@@ -634,12 +634,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
           try {
             let lastProgressText = "";
             let lastUpstreamEventType = "";
-            const updateImageProgress = (text: string, upstreamEventType?: string) => {
+            const updateImageProgress = (text: string, upstreamEventType?: string, upstreamPayload?: string) => {
               const normalizedText = String(text || "");
               const normalizedEventType = String(upstreamEventType || "").trim();
               if (
                 !normalizedText.trim() &&
-                !normalizedEventType
+                !normalizedEventType &&
+                !upstreamPayload
               ) {
                 return;
               }
@@ -668,6 +669,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                                       image.progressEventType,
                                       normalizedEventType,
                                     ),
+                                    upstreamPayload: upstreamPayload || image.upstreamPayload,
                                   }
                                 : image,
                             ),
@@ -684,18 +686,20 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               queuedTurn.mode === "edit"
                 ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, queuedTurn.size, {
                     stream: queuedTurn.stream,
-                    onProgress: ({ text, chunk }) =>
+                    onProgress: ({ text, chunk, upstreamPayload }) =>
                       updateImageProgress(
                         text,
                         typeof chunk.upstream_event_type === "string" ? chunk.upstream_event_type : "",
+                        upstreamPayload,
                       ),
                   })
                 : await generateImage(queuedTurn.prompt, queuedTurn.model, queuedTurn.size, {
                     stream: queuedTurn.stream,
-                    onProgress: ({ text, chunk }) =>
+                    onProgress: ({ text, chunk, upstreamPayload }) =>
                       updateImageProgress(
                         text,
                         typeof chunk.upstream_event_type === "string" ? chunk.upstream_event_type : "",
+                        upstreamPayload,
                       ),
                   });
             const first = data.data?.[0];
@@ -703,13 +707,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               throw new Error("未返回图片数据");
             }
 
-            const nextImage: StoredImage = {
-              id: pendingImage.id,
-              status: "success",
-              b64_json: first.b64_json,
-              progress: undefined,
-              progressEventType: undefined,
-            };
+            const upstreamPayload = data.upstream_payload;
 
             await updateConversation(
               conversationId,
@@ -722,7 +720,17 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                     turn.id === queuedTurn.id
                       ? {
                           ...turn,
-                          images: turn.images.map((image) => (image.id === nextImage.id ? nextImage : image)),
+                          images: turn.images.map((image) =>
+                            image.id === pendingImage.id
+                              ? {
+                                  ...image,
+                                  status: "success" as const,
+                                  b64_json: first.b64_json,
+                                  upstreamPayload,
+                                  error: undefined,
+                                }
+                              : image,
+                          ),
                         }
                       : turn,
                   ),
@@ -731,16 +739,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               { persist: false },
             );
 
-            return nextImage;
+            return {
+              id: pendingImage.id,
+              status: "success" as const,
+              b64_json: first.b64_json,
+            } satisfies StoredImage;
           } catch (error) {
             const message = error instanceof Error ? error.message : "生成失败";
-            const failedImage: StoredImage = {
-              id: pendingImage.id,
-              status: "error",
-              error: message,
-              progress: undefined,
-              progressEventType: undefined,
-            };
 
             await updateConversation(
               conversationId,
@@ -753,7 +758,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                     turn.id === queuedTurn.id
                       ? {
                           ...turn,
-                          images: turn.images.map((image) => (image.id === failedImage.id ? failedImage : image)),
+                          images: turn.images.map((image) =>
+                            image.id === pendingImage.id
+                              ? {
+                                  ...image,
+                                  status: "error" as const,
+                                  error: message,
+                                }
+                              : image,
+                          ),
                         }
                       : turn,
                   ),

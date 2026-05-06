@@ -88,6 +88,7 @@ export type SystemLog = {
 export type ImageResponse = {
   created: number;
   data: Array<{ b64_json: string; revised_prompt?: string }>;
+  upstream_payload?: string;
 };
 
 type ImageStreamChunk = {
@@ -105,7 +106,7 @@ type ImageStreamChunk = {
 
 export type ImageRequestOptions = {
   stream?: boolean;
-  onProgress?: (event: { text: string; chunk: ImageStreamChunk }) => void;
+  onProgress?: (event: { text: string; chunk: ImageStreamChunk; upstreamPayload?: string }) => void;
 };
 
 export type LoginResponse = {
@@ -398,6 +399,15 @@ function resolveImageStreamProgressText(chunk: ImageStreamChunk) {
   if (eventType === "server_ste_metadata") {
     return "已开始生成...";
   }
+  if (eventType === "message_stream_complete") {
+    return "上游已生成完成，准备拉取图片...";
+  }
+  if (eventType === "resolving_image") {
+    return "正在向上游获取图片地址...";
+  }
+  if (eventType === "downloading_image") {
+    return "正在下载图片字节，请稍候...";
+  }
   return `处理中 (${eventType})...`;
 }
 
@@ -464,14 +474,15 @@ async function parseImageStreamResponse(
     }
 
     const explicitProgress = typeof chunk.progress_text === "string" ? chunk.progress_text : "";
-    const progress = explicitProgress
-      ? (progressTextBuffer += explicitProgress)
-      : (progressTextBuffer || resolveImageStreamProgressText(chunk));
-    if (progress && onProgress) {
-      onProgress({ text: progress, chunk });
+    if (explicitProgress) {
+      progressTextBuffer += explicitProgress;
     }
-    if (progress) {
-      lastProgress = progress;
+    const statusText = explicitProgress ? "" : resolveImageStreamProgressText(chunk);
+    if (onProgress && (statusText || chunk.upstream_event_type || progressTextBuffer)) {
+      onProgress({ text: statusText, chunk, upstreamPayload: progressTextBuffer || undefined });
+    }
+    if (statusText) {
+      lastProgress = statusText;
     }
 
     if (chunk.object === "image.generation.message") {
@@ -537,6 +548,7 @@ async function parseImageStreamResponse(
   return {
     created: created || Math.floor(Date.now() / 1000),
     data,
+    upstream_payload: progressTextBuffer || undefined,
   } satisfies ImageResponse;
 }
 
