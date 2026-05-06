@@ -115,6 +115,21 @@ function sortImageConversations(conversations: ImageConversation[]) {
   return [...conversations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+function appendUpstreamEventTrail(currentTrail: string | undefined, nextEventType: string) {
+  const normalized = String(nextEventType || "").trim();
+  if (!normalized) {
+    return currentTrail;
+  }
+  const parts = String(currentTrail || "")
+    .split(" → ")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (parts[parts.length - 1] === normalized) {
+    return parts.join(" → ");
+  }
+  return [...parts, normalized].join(" → ");
+}
+
 async function recoverConversationHistory(items: ImageConversation[]) {
   const normalized = items.map((conversation) => {
     let changed = false;
@@ -134,7 +149,13 @@ async function recoverConversationHistory(items: ImageConversation[]) {
           error: undefined,
           images: turn.images.map((image) =>
             image.status === "loading"
-              ? { ...image, status: "loading" as const, error: undefined, progress: message }
+              ? {
+                  ...image,
+                  status: "loading" as const,
+                  error: undefined,
+                  progress: message,
+                  progressEventType: undefined,
+                }
               : image,
           ),
         };
@@ -564,7 +585,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                   error: undefined,
                   images: turn.images.map((image) =>
                     image.status === "loading"
-                      ? { ...image, progress: queuedTurn.stream ? "正在建立流式连接..." : undefined }
+                      ? {
+                          ...image,
+                          progress: queuedTurn.stream ? "正在建立流式连接..." : undefined,
+                          progressEventType: undefined,
+                        }
                       : image,
                   ),
                 }
@@ -608,12 +633,21 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
         const tasks = pendingImages.map(async (pendingImage) => {
           try {
             let lastProgressText = "";
-            const updateImageProgress = (text: string) => {
-              const normalizedText = text.trim();
-              if (!normalizedText || normalizedText === lastProgressText) {
+            let lastUpstreamEventType = "";
+            const updateImageProgress = (text: string, upstreamEventType?: string) => {
+              const normalizedText = String(text || "");
+              const normalizedEventType = String(upstreamEventType || "").trim();
+              if (
+                !normalizedText.trim() &&
+                !normalizedEventType
+              ) {
+                return;
+              }
+              if (normalizedText === lastProgressText && normalizedEventType === lastUpstreamEventType) {
                 return;
               }
               lastProgressText = normalizedText;
+              lastUpstreamEventType = normalizedEventType;
               void updateConversation(
                 conversationId,
                 (current) => {
@@ -626,7 +660,16 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                         ? {
                             ...turn,
                             images: turn.images.map((image) =>
-                              image.id === pendingImage.id ? { ...image, progress: normalizedText } : image,
+                              image.id === pendingImage.id
+                                ? {
+                                    ...image,
+                                    progress: normalizedText || image.progress,
+                                    progressEventType: appendUpstreamEventTrail(
+                                      image.progressEventType,
+                                      normalizedEventType,
+                                    ),
+                                  }
+                                : image,
                             ),
                           }
                         : turn,
@@ -641,11 +684,19 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               queuedTurn.mode === "edit"
                 ? await editImage(referenceFiles, queuedTurn.prompt, queuedTurn.model, queuedTurn.size, {
                     stream: queuedTurn.stream,
-                    onProgress: ({ text }) => updateImageProgress(text),
+                    onProgress: ({ text, chunk }) =>
+                      updateImageProgress(
+                        text,
+                        typeof chunk.upstream_event_type === "string" ? chunk.upstream_event_type : "",
+                      ),
                   })
                 : await generateImage(queuedTurn.prompt, queuedTurn.model, queuedTurn.size, {
                     stream: queuedTurn.stream,
-                    onProgress: ({ text }) => updateImageProgress(text),
+                    onProgress: ({ text, chunk }) =>
+                      updateImageProgress(
+                        text,
+                        typeof chunk.upstream_event_type === "string" ? chunk.upstream_event_type : "",
+                      ),
                   });
             const first = data.data?.[0];
             if (!first?.b64_json) {
@@ -657,6 +708,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               status: "success",
               b64_json: first.b64_json,
               progress: undefined,
+              progressEventType: undefined,
             };
 
             await updateConversation(
@@ -687,6 +739,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               status: "error",
               error: message,
               progress: undefined,
+              progressEventType: undefined,
             };
 
             await updateConversation(
@@ -755,7 +808,15 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
                     status: "error",
                     error: message,
                     images: turn.images.map((image) =>
-                      image.status === "loading" ? { ...image, status: "error", error: message } : image,
+                      image.status === "loading"
+                        ? {
+                            ...image,
+                            status: "error",
+                            error: message,
+                            progress: undefined,
+                            progressEventType: undefined,
+                          }
+                        : image,
                     ),
                   }
                 : turn,

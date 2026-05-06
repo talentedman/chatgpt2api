@@ -18,6 +18,7 @@ export type StoredImage = {
   b64_json?: string;
   error?: string;
   progress?: string;
+  progressEventType?: string;
 };
 
 export type ImageTurnStatus = "queued" | "generating" | "success" | "error";
@@ -60,6 +61,7 @@ let imageConversationWriteQueue: Promise<void> = Promise.resolve();
 
 function normalizeStoredImage(image: StoredImage): StoredImage {
   const progress = typeof image.progress === "string" ? image.progress : undefined;
+  const progressEventType = typeof image.progressEventType === "string" ? image.progressEventType : undefined;
   const error = typeof image.error === "string" ? image.error : undefined;
   const normalizedStatus =
     image.status === "loading" || image.status === "error" || image.status === "success"
@@ -73,6 +75,7 @@ function normalizeStoredImage(image: StoredImage): StoredImage {
     b64_json: typeof image.b64_json === "string" ? image.b64_json : undefined,
     error,
     progress,
+    progressEventType,
   };
 }
 

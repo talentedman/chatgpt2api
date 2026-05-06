@@ -383,11 +383,6 @@ function findErrorMessage(value: unknown): string {
 }
 
 function resolveImageStreamProgressText(chunk: ImageStreamChunk) {
-  const explicit = String(chunk.progress_text || "").trim();
-  if (explicit) {
-    return explicit;
-  }
-
   if (chunk.object === "image.generation.result") {
     return "正在回传生成结果...";
   }
@@ -429,6 +424,7 @@ async function parseImageStreamResponse(
   let created: number | null = null;
   let finalMessage = "";
   let lastProgress = "";
+  let progressTextBuffer = "";
   const data: Array<{ b64_json: string; revised_prompt?: string }> = [];
 
   const processEvent = (rawEvent: string) => {
@@ -467,7 +463,10 @@ async function parseImageStreamResponse(
       created = chunk.created;
     }
 
-    const progress = resolveImageStreamProgressText(chunk);
+    const explicitProgress = typeof chunk.progress_text === "string" ? chunk.progress_text : "";
+    const progress = explicitProgress
+      ? (progressTextBuffer += explicitProgress)
+      : (progressTextBuffer || resolveImageStreamProgressText(chunk));
     if (progress && onProgress) {
       onProgress({ text: progress, chunk });
     }

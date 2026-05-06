@@ -219,29 +219,40 @@ export function ImageResults({
                     return (
                       <div
                         key={image.id}
-                        className={cn(
-                          "break-inside-avoid overflow-hidden border border-stone-200/80 bg-stone-100/80",
-                          turn.size === "1:1" && "aspect-square",
-                          turn.size === "16:9" && "aspect-video",
-                          turn.size === "9:16" && "aspect-[9/16]",
-                          turn.size === "4:3" && "aspect-[4/3]",
-                          turn.size === "3:4" && "aspect-[3/4]",
-                          !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "aspect-square",
-                        )}
+                        className="break-inside-avoid space-y-2"
                       >
-                        <div className="flex h-full flex-col items-center justify-center gap-3 px-6 py-8 text-center text-stone-500">
-                          <div className="rounded-full bg-white p-3 shadow-sm">
-                            {turn.status === "queued" ? (
-                              <Clock3 className="size-5" />
-                            ) : (
-                              <LoaderCircle className="size-5 animate-spin" />
-                            )}
-                          </div>
-                          <p className="text-sm">
+                        <div className="rounded-lg border border-stone-200/80 bg-white/90 px-3 py-2 text-xs text-stone-600">
+                          <p className="whitespace-pre-wrap break-words">
                             {turn.status === "queued"
                               ? "已加入当前对话队列..."
                               : image.progress?.trim() || "正在处理图片..."}
                           </p>
+                          {turn.status !== "queued" && image.progressEventType ? (
+                            <p className="mt-1 text-[11px] text-stone-400">
+                              上游过程：{formatUpstreamEventTrail(image.progressEventType)}
+                            </p>
+                          ) : null}
+                        </div>
+                        <div
+                          className={cn(
+                            "overflow-hidden border border-stone-200/80 bg-stone-100/80",
+                            turn.size === "1:1" && "aspect-square",
+                            turn.size === "16:9" && "aspect-video",
+                            turn.size === "9:16" && "aspect-[9/16]",
+                            turn.size === "4:3" && "aspect-[4/3]",
+                            turn.size === "3:4" && "aspect-[3/4]",
+                            !["1:1", "16:9", "9:16", "4:3", "3:4"].includes(turn.size) && "aspect-square",
+                          )}
+                        >
+                          <div className="flex h-full flex-col items-center justify-center px-6 py-8 text-center text-stone-500">
+                            <div className="rounded-full bg-white p-3 shadow-sm">
+                              {turn.status === "queued" ? (
+                                <Clock3 className="size-5" />
+                              ) : (
+                                <LoaderCircle className="size-5 animate-spin" />
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     );
@@ -291,4 +302,12 @@ function formatBase64ImageSize(base64: string) {
 
 function formatImageDimensions(width: number, height: number) {
   return `${width} x ${height}`;
+}
+
+function formatUpstreamEventTrail(trail: string) {
+  return trail
+    .split(" → ")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join(" → ");
 }
