@@ -523,26 +523,32 @@ class PlatformRegistrar:
         if resp is None:
             raise RuntimeError(error or "platform_login_authorize_failed")
         step(index, "登录 authorize 完成")
-        headers = self._json_headers(f"{auth_base}/log-in/password")
-        headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
-        resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/password/verify", json={"password": password}, headers=headers, allow_redirects=False, verify=False)
-        if resp is None or resp.status_code != 200:
-            raise RuntimeError(error or f"password_verify_http_{getattr(resp, 'status_code', 'unknown')}")
-        step(index, "密码校验完成")
-        payload = _response_json(resp)
-        continue_url = str(payload.get("continue_url") or "").strip()
-        page_type = str(((payload.get("page") or {}).get("type")) or "")
-        if page_type == "email_otp_verification" or "email-verification" in continue_url or "email-otp" in continue_url:
-            step(index, "独立登录需要邮箱验证码")
-            code = wait_for_code(mailbox)
-            if not code:
-                raise RuntimeError("独立登录等待验证码超时")
-            resp, reason = validate_otp(self.session, self.device_id, code)
+        final_url = str(getattr(resp, "url", "") or "")
+        already_authorized = bool(extract_oauth_callback_params_from_url(final_url)) or ("/consent" in final_url) or ("/oauth/callback" in final_url) or ("platform.openai.com" in final_url and "auth.openai.com" not in final_url)
+        if already_authorized:
+            step(index, "session 已登录,跳过密码校验")
+            continue_url = final_url
+        else:
+            headers = self._json_headers(f"{auth_base}/log-in/password")
+            headers["openai-sentinel-token"] = build_sentinel_token(self.session, self.device_id, "password_verify")
+            resp, error = request_with_local_retry(self.session, "post", f"{auth_base}/api/accounts/password/verify", json={"password": password}, headers=headers, allow_redirects=False, verify=False)
             if resp is None or resp.status_code != 200:
-                raise RuntimeError(reason or "独立登录验证码校验失败")
-            otp_payload = _response_json(resp)
-            continue_url = str(otp_payload.get("continue_url") or continue_url).strip()
-            step(index, "独立登录验证码校验完成")
+                raise RuntimeError(error or f"password_verify_http_{getattr(resp, 'status_code', 'unknown')}")
+            step(index, "密码校验完成")
+            payload = _response_json(resp)
+            continue_url = str(payload.get("continue_url") or "").strip()
+            page_type = str(((payload.get("page") or {}).get("type")) or "")
+            if page_type == "email_otp_verification" or "email-verification" in continue_url or "email-otp" in continue_url:
+                step(index, "独立登录需要邮箱验证码")
+                code = wait_for_code(mailbox)
+                if not code:
+                    raise RuntimeError("独立登录等待验证码超时")
+                resp, reason = validate_otp(self.session, self.device_id, code)
+                if resp is None or resp.status_code != 200:
+                    raise RuntimeError(reason or "独立登录验证码校验失败")
+                otp_payload = _response_json(resp)
+                continue_url = str(otp_payload.get("continue_url") or continue_url).strip()
+                step(index, "独立登录验证码校验完成")
         if not continue_url:
             continue_url = f"{auth_base}/sign-in-with-chatgpt/codex/consent"
         tokens = exchange_platform_tokens(self.session, self.device_id, code_verifier, continue_url)
