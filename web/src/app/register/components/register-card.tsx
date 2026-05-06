@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { AlertTriangle, LoaderCircle, Plus, Play, RotateCcw, Save, Square, Trash2, UserPlus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +30,7 @@ export function RegisterCard() {
   const save = useSettingsStore((state) => state.saveRegister);
   const toggle = useSettingsStore((state) => state.toggleRegister);
   const reset = useSettingsStore((state) => state.resetRegister);
+  const [logTab, setLogTab] = useState<"all" | "error">("all");
 
   if (isLoading) {
     return (
@@ -264,21 +266,41 @@ export function RegisterCard() {
                 <h3 className="text-sm font-semibold text-stone-900">实时日志</h3>
                 <p className="mt-1 text-xs text-stone-500">只保留内存中的最近 300 条。</p>
               </div>
-              <Badge variant="secondary" className="rounded-md">
-                {logs.length}
-              </Badge>
+              <div className="flex items-center gap-2">
+                <div className="inline-flex overflow-hidden rounded-md border border-stone-200 bg-white">
+                  <button
+                    type="button"
+                    onClick={() => setLogTab("all")}
+                    className={`px-2.5 py-1 text-xs transition ${logTab === "all" ? "bg-stone-900 text-white" : "text-stone-600 hover:bg-stone-50"}`}
+                  >
+                    全部
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setLogTab("error")}
+                    className={`px-2.5 py-1 text-xs transition ${logTab === "error" ? "bg-rose-600 text-white" : "text-stone-600 hover:bg-stone-50"}`}
+                  >
+                    仅报错
+                  </button>
+                </div>
+                <Badge variant="secondary" className="rounded-md">
+                  {logTab === "error" ? logs.filter((item) => item.level === "red").length : logs.length}
+                </Badge>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto border border-stone-200 bg-white/70 p-3 font-mono text-xs leading-6">
-              {logs.length === 0 ? (
-                <div className="text-stone-500">暂无日志</div>
-              ) : (
-                logs.slice().reverse().map((item, index) => (
+              {(() => {
+                const filtered = logTab === "error" ? logs.filter((item) => item.level === "red") : logs;
+                if (filtered.length === 0) {
+                  return <div className="text-stone-500">{logTab === "error" ? "暂无报错日志" : "暂无日志"}</div>;
+                }
+                return filtered.slice().reverse().map((item, index) => (
                   <div key={`${item.time}-${index}`} className={item.level === "red" ? "text-rose-600" : item.level === "green" ? "text-emerald-700" : item.level === "yellow" ? "text-amber-700" : "text-stone-700"}>
                     <span className="text-stone-400">{new Date(item.time).toLocaleTimeString()}</span>
                     <span className="pl-2">{item.text}</span>
                   </div>
-                ))
-              )}
+                ));
+              })()}
             </div>
         </div>
       </section>
