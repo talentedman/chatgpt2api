@@ -19,9 +19,24 @@ import { DateRangeFilter } from "@/components/date-range-filter";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { deleteManagedImages, fetchManagedImages, type ManagedImage } from "@/lib/api";
 import { formatServerDateTime } from "@/lib/datetime";
 import { useAuthGuard } from "@/lib/use-auth-guard";
+
+const PAGE_SIZE_OPTIONS = [10, 30, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 30;
+const PAGE_SIZE_STORAGE_KEY = "chatgpt2api:image_manager_page_size";
+
+function readStoredPageSize() {
+  if (typeof window === "undefined") {
+    return DEFAULT_PAGE_SIZE;
+  }
+  const stored = window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY);
+  const parsed = Number(stored);
+  return PAGE_SIZE_OPTIONS.includes(parsed as (typeof PAGE_SIZE_OPTIONS)[number]) ? parsed : DEFAULT_PAGE_SIZE;
+}
 
 function formatSize(size: number) {
   return size > 1024 * 1024 ? `${(size / 1024 / 1024).toFixed(2)} MB` : `${Math.ceil(size / 1024)} KB`;
@@ -37,6 +52,8 @@ function ImageManagerContent() {
     Array<{ id: string; src: string; sizeLabel?: string; dimensions?: string; prompt?: string }>
   >([]);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  const [pageInput, setPageInput] = useState("");
   const [dimensions, setDimensions] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
@@ -50,7 +67,6 @@ function ImageManagerContent() {
     dimensions: dimensions[item.url],
     prompt: item.prompt,
   }));
-  const pageSize = 12;
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
   const safePage = Math.min(page, pageCount);
   const currentRows = items.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -69,13 +85,15 @@ function ImageManagerContent() {
     setLightboxOpen(true);
   };
 
-  const loadImages = async () => {
+  const loadImages = async (options: { keepPage?: boolean } = {}) => {
     setIsLoading(true);
     try {
       const data = await fetchManagedImages({ start_date: startDate, end_date: endDate });
       setItems(data.items);
-      setPage(1);
-      setSelectedPaths([]);
+      if (!options.keepPage) {
+        setPage(1);
+        setSelectedPaths([]);
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "加载图片失败");
     } finally {
@@ -126,7 +144,7 @@ function ImageManagerContent() {
         toast.warning(`${result.missing.length} 张图片不存在或已删除`);
       }
       setSelectedPaths((current) => current.filter((path) => !normalized.includes(path)));
-      await loadImages();
+      await loadImages({ keepPage: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "删除图片失败");
     } finally {
@@ -137,6 +155,38 @@ function ImageManagerContent() {
   useEffect(() => {
     void loadImages();
   }, [startDate, endDate]);
+
+  useEffect(() => {
+    setPageSize(readStoredPageSize());
+  }, []);
+
+  const handlePageSizeChange = (value: string) => {
+    const next = Number(value);
+    if (!PAGE_SIZE_OPTIONS.includes(next as (typeof PAGE_SIZE_OPTIONS)[number])) {
+      return;
+    }
+    const firstVisibleIndex = (safePage - 1) * pageSize;
+    const nextPage = Math.max(1, Math.floor(firstVisibleIndex / next) + 1);
+    setPageSize(next);
+    setPage(nextPage);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(next));
+    }
+  };
+
+  const handlePageJump = () => {
+    const trimmed = pageInput.trim();
+    if (!trimmed) {
+      return;
+    }
+    const target = Number(trimmed);
+    if (!Number.isFinite(target) || target < 1) {
+      toast.error("请输入有效页码");
+      return;
+    }
+    setPage(Math.min(pageCount, Math.max(1, Math.floor(target))));
+    setPageInput("");
+  };
 
   return (
     <section className="space-y-5">
@@ -321,7 +371,23 @@ function ImageManagerContent() {
               );
             })}
           </div>
-          <div className="flex items-center justify-end gap-2 border-t border-stone-100 px-4 py-3 text-sm text-stone-500">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-stone-100 px-4 py-3 text-sm text-stone-500">
+            <div className="flex items-center gap-1">
+              <span>每页</span>
+              <Select value={String(pageSize)} onValueChange={handlePageSizeChange}>
+                <SelectTrigger className="h-9 w-[80px] rounded-lg border-stone-200 bg-white">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZE_OPTIONS.map((option) => (
+                    <SelectItem key={option} value={String(option)}>
+                      {option}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <span>张</span>
+            </div>
             <span>第 {safePage} / {pageCount} 页，共 {items.length} 张</span>
             <Button variant="outline" size="icon" className="size-9 rounded-lg border-stone-200 bg-white" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
               <ChevronLeft className="size-4" />
@@ -329,6 +395,33 @@ function ImageManagerContent() {
             <Button variant="outline" size="icon" className="size-9 rounded-lg border-stone-200 bg-white" disabled={safePage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
               <ChevronRight className="size-4" />
             </Button>
+            <div className="flex items-center gap-1">
+              <span>跳至</span>
+              <Input
+                type="number"
+                min={1}
+                max={pageCount}
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handlePageJump();
+                  }
+                }}
+                placeholder={String(safePage)}
+                className="h-9 w-16 rounded-lg border-stone-200 bg-white text-center"
+              />
+              <span>页</span>
+              <Button
+                variant="outline"
+                className="h-9 rounded-lg border-stone-200 bg-white px-3 text-stone-700"
+                onClick={handlePageJump}
+                disabled={!pageInput.trim()}
+              >
+                确定
+              </Button>
+            </div>
           </div>
           {!isLoading && items.length === 0 ? <div className="px-6 py-14 text-center text-sm text-stone-500">没有找到图片</div> : null}
         </CardContent>

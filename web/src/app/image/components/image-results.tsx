@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Clock3, LoaderCircle, Sparkles } from "lucide-react";
+import { Clock3, LoaderCircle, Sparkles, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,7 @@ type ImageResultsProps = {
   selectedConversation: ImageConversation | null;
   onOpenLightbox: (images: ImageLightboxItem[], index: number) => void;
   onContinueEdit: (conversationId: string, image: StoredImage | StoredReferenceImage) => void;
+  onRegenerateClick: (conversationId: string, turnId: string, turnLabel: string) => void;
   formatConversationTime: (value: string) => string;
 };
 
@@ -25,6 +26,7 @@ export function ImageResults({
   selectedConversation,
   onOpenLightbox,
   onContinueEdit,
+  onRegenerateClick,
   formatConversationTime,
 }: ImageResultsProps) {
   const [imageDimensions, setImageDimensions] = useState<Record<string, string>>({});
@@ -96,6 +98,22 @@ export function ImageResults({
                   <span>{turn.stream ? "流式" : "非流式"}</span>
                   <span>{getTurnStatusLabel(turn.status)}</span>
                   <span>{formatConversationTime(turn.createdAt)}</span>
+                  {(turn.status === "success" || turn.status === "error") && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onRegenerateClick(
+                          selectedConversation.id,
+                          turn.id,
+                          `第 ${turnIndex + 1} 轮（${turn.mode === "edit" ? "编辑图" : "文生图"}）`,
+                        )
+                      }
+                      className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-stone-500 transition hover:bg-stone-200 hover:text-stone-700"
+                    >
+                      <RotateCcw className="size-3" />
+                      重新生成
+                    </button>
+                  )}
                 </div>
                 <div className="text-right">{turn.prompt}</div>
               </div>

@@ -221,6 +221,11 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState<{ type: "one"; id: string } | { type: "all" } | null>(null);
+  const [regenerateTarget, setRegenerateTarget] = useState<{
+    conversationId: string;
+    turnId: string;
+    turnLabel: string;
+  } | null>(null);
 
   const parsedCount = useMemo(() => Math.max(1, Math.min(10, Number(imageCount) || 1)), [imageCount]);
   const selectedConversation = useMemo(
@@ -548,6 +553,13 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
     [],
   );
 
+  const handleRegenerateClick = useCallback(
+    (conversationId: string, turnId: string, turnLabel: string) => {
+      setRegenerateTarget({ conversationId, turnId, turnLabel });
+    },
+    [],
+  );
+
   const openLightbox = useCallback((images: ImageLightboxItem[], index: number) => {
     if (images.length === 0) {
       return;
@@ -853,6 +865,51 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
   );
   /* eslint-enable react-hooks/preserve-manual-memoization */
 
+  const handleRegenerate = useCallback(
+    async (conversationId: string, turnId: string) => {
+      const conversation = conversationsRef.current.find((item) => item.id === conversationId);
+      const sourceTurn = conversation?.turns.find((turn) => turn.id === turnId);
+      if (!conversation || !sourceTurn) {
+        toast.error("未找到原始对话轮次");
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const newTurnId = createId();
+      const draftTurn: ImageTurn = {
+        id: newTurnId,
+        prompt: sourceTurn.prompt,
+        model: sourceTurn.model,
+        stream: sourceTurn.stream,
+        mode: sourceTurn.mode,
+        referenceImages: sourceTurn.referenceImages,
+        count: sourceTurn.count,
+        size: sourceTurn.size,
+        images: Array.from({ length: sourceTurn.count }, (_, index) => ({
+          id: `${newTurnId}-${index}`,
+          status: "loading" as const,
+        })),
+        createdAt: now,
+        status: "queued",
+      };
+
+      setSelectedConversationId(conversationId);
+
+      await updateConversation(conversationId, (current) => {
+        const base = current ?? conversation;
+        return {
+          ...base,
+          updatedAt: now,
+          turns: [...base.turns, draftTurn],
+        };
+      });
+
+      void runConversationQueue(conversationId);
+      toast.success("已加入当前对话队列");
+    },
+    [runConversationQueue, updateConversation],
+  );
+
   useEffect(() => {
     for (const conversation of conversations) {
       if (
@@ -1010,6 +1067,7 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               selectedConversation={selectedConversation}
               onOpenLightbox={openLightbox}
               onContinueEdit={handleContinueEdit}
+              onRegenerateClick={handleRegenerateClick}
               formatConversationTime={formatConversationTime}
             />
           </div>
@@ -1061,6 +1119,33 @@ function ImagePageContent({ isAdmin }: { isAdmin: boolean }) {
               </Button>
               <Button className="bg-rose-600 text-white hover:bg-rose-700" onClick={() => void handleConfirmDelete()}>
                 确认删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
+      {regenerateTarget ? (
+        <Dialog open onOpenChange={(open) => (!open ? setRegenerateTarget(null) : null)}>
+          <DialogContent showCloseButton={false} className="rounded-2xl p-6">
+            <DialogHeader className="gap-2">
+              <DialogTitle>确认重新生成</DialogTitle>
+              <DialogDescription className="text-sm leading-6">
+                确认以相同参数重新生成{regenerateTarget.turnLabel}吗？这将创建一个新的对话轮次。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRegenerateTarget(null)}>
+                取消
+              </Button>
+              <Button
+                className="bg-stone-950 text-white hover:bg-stone-800"
+                onClick={() => {
+                  handleRegenerate(regenerateTarget.conversationId, regenerateTarget.turnId);
+                  setRegenerateTarget(null);
+                }}
+              >
+                确认重新生成
               </Button>
             </DialogFooter>
           </DialogContent>
