@@ -430,7 +430,7 @@ class OpenAIBackendAPI:
             "fork_from_shared_post": False,
             "parent_message_id": new_uuid(),
             "model": self._image_model_slug(model),
-            "client_prepare_state": "success",
+            "client_prepare_state": "none",
             "timezone_offset_min": -480,
             "timezone": "Asia/Shanghai",
             "conversation_mode": {"kind": "primary_assistant"},
@@ -573,7 +573,7 @@ class OpenAIBackendAPI:
             }],
             "parent_message_id": new_uuid(),
             "model": self._image_model_slug(model),
-            "client_prepare_state": "sent",
+            "client_prepare_state": "success",
             "timezone_offset_min": -480,
             "timezone": "Asia/Shanghai",
             "conversation_mode": {"kind": "primary_assistant"},
@@ -649,10 +649,15 @@ class OpenAIBackendAPI:
             content = message.get("content") or {}
             if author.get("role") != "tool":
                 continue
-            if metadata.get("async_task_type") != "image_gen":
-                continue
             file_ids, sediment_ids = [], []
             collect_asset_ids(content, file_ids, sediment_ids)
+            is_image_tool = (
+                metadata.get("async_task_type") == "image_gen"
+                or any(str(key).startswith("image_gen") for key in metadata.keys())
+                or bool(file_ids or sediment_ids)
+            )
+            if not is_image_tool or not (file_ids or sediment_ids):
+                continue
             records.append(
                 {"message_id": message_id, "create_time": message.get("create_time") or 0, "file_ids": file_ids,
                  "sediment_ids": sediment_ids})
@@ -714,7 +719,7 @@ class OpenAIBackendAPI:
         return self._extract_latest_assistant_text(conversation)
 
     def _poll_image_results(
-            self, conversation_id: str, timeout_secs: float = 120.0
+            self, conversation_id: str, timeout_secs: float = 240.0
     ) -> tuple[list[str], list[str], str]:
         """轮询 conversation，直到拿到图片文件 id 或超时。"""
         start = time.time()
